@@ -19,7 +19,7 @@ import { parseEml } from './connectors/upload';
 import { ingestMessages } from './ingest';
 import { analyseConversation, analysePending, backfillHealthHistory, updateCustomerHealth } from './analyze';
 import { runTick, syncMailbox } from './worker';
-import { aiModel, aiProvider } from './ai/llm';
+import { aiModel, aiPaused, aiProvider } from './ai/llm';
 import { appUrl, emailLayout, esc, mailerProvider, sendEmail } from './mailer';
 import { buildReport, runSchedule } from './reports';
 import { ask, SUGGESTED_QUESTIONS } from './copilot';
@@ -1319,6 +1319,38 @@ r.post('/api/system/old-unanswered', async (ctx) => {
 	}
 	await audit(ctx, 'conversations.old_unanswered_cleared', 'conversation', null, { days, threads: ids.length });
 	return { threads: ids.length };
+});
+
+// ── Re-analyse recent email (Settings) ──────────────────────────────────────
+// Threads are picked by their latest message, so a thread with any new inbound, sent or internal mail in the
+// window is re-read in full (up to the 14 newest messages, sent replies included).
+const reanalyseDays = (v: unknown) => Math.max(1, Math.min(365, Math.floor(Number(v)) || 7));
+r.get('/api/system/reanalyse', async (ctx) => {
+	requireRole(ctx.user, 'admin');
+	const days = reanalyseDays(ctx.query.get('days'));
+	const row = await one<any>(
+		`select count(*)::int as threads,
+		        (select count(*)::int from emails e join conversations c2 on c2.id=e.conversation_id
+		          where c2.org_id=$1 and c2.message_count > 0 and c2.last_message_at > now() - make_interval(days => $2) and not e.is_duplicate) as emails,
+		        (select count(*)::int from emails e join conversations c2 on c2.id=e.conversation_id
+		          where c2.org_id=$1 and c2.message_count > 0 and c2.last_message_at > now() - make_interval(days => $2) and not e.is_duplicate and e.direction='outbound') as sent
+		   from conversations c where c.org_id=$1 and c.message_count > 0 and c.last_message_at > now() - make_interval(days => $2)`,
+		[ctx.user!.orgId, days],
+	);
+	return { ...row, days, provider: aiProvider(), model: aiModel(), paused: await aiPaused() };
+});
+r.post('/api/system/reanalyse', async (ctx) => {
+	requireRole(ctx.user, 'admin');
+	const days = reanalyseDays(ctx.body?.days);
+	const marked = (await q<any>(
+		`update conversations set needs_analysis=true, updated_at=now()
+		  where org_id=$1 and message_count > 0 and last_message_at > now() - make_interval(days => $2) returning id`,
+		[ctx.user!.orgId, days],
+	)).length;
+	// do a first batch now; the background worker keeps going through the rest every few minutes
+	const done = marked ? await analysePending(ctx.user!.orgId, 60, Date.now() + 18_000) : 0;
+	await audit(ctx, 'system.reanalysed', null, null, { days, threads: marked });
+	return { marked, done, remaining: Math.max(0, marked - done) };
 });
 
 // ── Customer database (Admin) ───────────────────────────────────────────────

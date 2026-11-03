@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MdCheckCircle, MdErrorOutline, MdSave } from 'react-icons/md';
+import { MdCheckCircle, MdErrorOutline, MdRefresh, MdSave } from 'react-icons/md';
 import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { Card, Loader, PageHead, Switch } from '../../components/ui';
+import { Card, Loader, Modal, PageHead, Switch } from '../../components/ui';
 import { COLORS, ago } from '../../lib/format';
 
 const Status = ({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) => (
@@ -13,6 +13,51 @@ const Status = ({ ok, label, detail }: { ok: boolean; label: string; detail?: st
 		<span className="small faint">{detail}</span>
 	</div>
 );
+
+/** Run the AI over threads from the last N days again, e.g. after changing the model, templates or reference data. */
+function ReanalyseCard() {
+	const toast = useToast();
+	const qc = useQueryClient();
+	const [days, setDays] = useState(7);
+	const [confirm, setConfirm] = useState(false);
+	const safe = Math.max(1, Math.min(365, Math.floor(days) || 1));
+	const preview = useQuery({ queryKey: ['reanalyse-preview', safe], queryFn: () => api(`/system/reanalyse?days=${safe}`) });
+	const run = useMutation({
+		mutationFn: () => api('/system/reanalyse', { body: { days: safe } }),
+		onSuccess: (r: any) => {
+			setConfirm(false);
+			qc.invalidateQueries();
+			toast(r.remaining ? `${r.done} threads re-analysed, ${r.remaining} more are queued and continue in the background` : `${r.done} threads re-analysed`);
+		},
+		onError: (e: any) => toast(e.message, 'error'),
+	});
+	const p = preview.data;
+	const nf = (v: number) => (v || 0).toLocaleString('en-IN');
+	return (
+		<Card title="Re-analyse email" accent={COLORS.teal}
+			sub="Runs the AI again over conversations with any email in the last few days, using the current model, templates and reference data. Sent mail is included: each conversation is read with your replies. Nothing is deleted, and drafts you have edited are kept.">
+			<div className="row wrap" style={{ gap: 12 }}>
+				<span className="small">Conversations with mail in the last</span>
+				<input className="input" type="number" min={1} max={365} style={{ width: 90 }} value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Days" />
+				<span className="small">days</span>
+				{[1, 7, 30, 90].map((d) => <button key={d} className={`btn sm${safe === d ? ' primary' : ''}`} onClick={() => setDays(d)}>{d === 1 ? '24 h' : `${d} d`}</button>)}
+			</div>
+			<div className="small mt-16">
+				{preview.isLoading ? 'Counting…' : p ? <><b>{nf(p.threads)}</b> conversations, {nf(p.emails)} emails, of which <b>{nf(p.sent)}</b> sent by your team.</> : null}
+			</div>
+			{p && (p.provider === 'heuristic' || p.paused) && (
+				<div className="small mt-8" style={{ color: COLORS.amber }}>{p.paused ? 'AI is paused right now, so results would use the rules engine until it resumes.' : 'No AI key is set, so only the rules engine would run.'}</div>
+			)}
+			<button className="btn primary mt-16" disabled={!p?.threads || run.isPending} onClick={() => setConfirm(true)}><MdRefresh /> {run.isPending ? 'Analysing…' : 'Re-analyse'}</button>
+			{confirm && p && (
+				<Modal title="Re-analyse recent email?" onClose={() => setConfirm(false)}
+					footer={<><button className="btn" onClick={() => setConfirm(false)}>Cancel</button><button className="btn primary" onClick={() => run.mutate()} disabled={run.isPending}>{run.isPending ? 'Working' : `Yes, ${nf(p.threads)} conversations`}</button></>}>
+					<p className="small">{nf(p.threads)} conversations with mail in the last {safe} days will be analysed again with {p.model}. The first batch finishes now; the rest continue in the background (progress is under Analysis queue below). This uses AI credit.</p>
+				</Modal>
+			)}
+		</Card>
+	);
+}
 
 export default function Settings() {
 	const { can } = useAuth();
@@ -102,6 +147,7 @@ export default function Settings() {
 							)}
 						</div>
 					</Card>
+					{admin && <ReanalyseCard />}
 					<Card title="Data protection" accent={COLORS.purple}>
 						<div className="col gap-16">
 							<Switch checked={form.piiRedaction} onChange={(v) => admin && setForm({ ...form, piiRedaction: v })} label="Redact card, bank, ID and password details before AI analysis" />
