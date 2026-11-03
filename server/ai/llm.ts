@@ -95,6 +95,38 @@ export function anthropicHeaders(): Record<string, string> {
 	return h;
 }
 
+/**
+ * Claude call that must end in a call to one tool. Forces the tool with tool_choice where the model
+ * allows it; some models reject forced tool_choice ("type tool and any are not supported"), so on that
+ * error we switch to tool_choice auto with an explicit instruction, and also accept a JSON reply as text.
+ */
+let forcedToolUnsupported = false;
+async function anthropicToolCall(body: any, name: string): Promise<{ data: any; input: any | null }> {
+	const auto = () => ({
+		...body,
+		tool_choice: { type: 'auto' },
+		messages: body.messages.map((m: any, i: number) => i === body.messages.length - 1 && typeof m.content === 'string'
+			? { ...m, content: `${m.content}\n\nYou must answer by calling the ${name} tool. Do not reply with text.` }
+			: m),
+	});
+	let data: any;
+	if (!forcedToolUnsupported) {
+		try {
+			data = await anthropicCall({ ...body, tool_choice: { type: 'tool', name } });
+		} catch (e: any) {
+			if (e instanceof QuotaError || !/tool_choice/i.test(e?.message || '')) throw e;
+			forcedToolUnsupported = true;
+		}
+	}
+	if (!data) data = await anthropicCall(auto());
+	const tool = (data.content || []).find((c: any) => c.type === 'tool_use' && (!c.name || c.name === name));
+	if (tool) return { data, input: tool.input };
+	const text = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
+	let input: any = null;
+	try { input = text ? parseJsonLoose(text) : null; } catch { input = null; }
+	return { data, input };
+}
+
 async function anthropicCall(body: any) {
 	await pace();
 	for (let i = 0; i < 4; i++) {
@@ -335,19 +367,17 @@ export async function analyseThread(input: ThreadInput, orgId: number): Promise<
 			return { analysis: coerce(parseJsonLoose(r.text), fallback), model };
 		}
 		if (provider === 'anthropic') {
-			const data = await anthropicCall({
+			const { data, input: result } = await anthropicToolCall({
 				model,
 				max_tokens: 6000,
 				// the system prompt is identical for every thread, so it is cached
 				system: [{ type: 'text', text: SYSTEM(input.orgName), cache_control: { type: 'ephemeral' } }],
 				tools: [{ name: 'record_analysis', description: 'Record the structured analysis of the email conversation.', input_schema: ANALYSIS_SCHEMA }],
-				tool_choice: { type: 'tool', name: 'record_analysis' },
 				messages: [{ role: 'user', content: buildPrompt(input) }],
-			});
+			}, 'record_analysis');
 			await logUsage(orgId, model, data.usage?.input_tokens, data.usage?.output_tokens, 'analysis');
-			const tool = (data.content || []).find((c: any) => c.type === 'tool_use');
-			if (!tool) throw new Error('No tool_use in response');
-			return { analysis: coerce(tool.input, fallback), model };
+			if (!result) throw new Error('No tool_use in response');
+			return { analysis: coerce(result, fallback), model };
 		}
 		const data = await openaiCall({
 			model,
@@ -381,9 +411,9 @@ export async function extractJson(orgId: number, system: string, prompt: string,
 		return parseJsonLoose(r.text);
 	}
 	if (provider === 'anthropic') {
-		const data = await anthropicCall({ model, max_tokens: 1500, system, tools: [{ name, description: 'Record the extracted fields.', input_schema: schema }], tool_choice: { type: 'tool', name }, messages: [{ role: 'user', content: prompt }] });
+		const { data, input } = await anthropicToolCall({ model, max_tokens: 1500, system, tools: [{ name, description: 'Record the extracted fields.', input_schema: schema }], messages: [{ role: 'user', content: prompt }] }, name);
 		await logUsage(orgId, model, data.usage?.input_tokens, data.usage?.output_tokens, name);
-		return (data.content || []).find((c: any) => c.type === 'tool_use')?.input || null;
+		return input || null;
 	}
 	const data = await openaiCall({ model, temperature: 0, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }], tools: [{ type: 'function', function: { name, description: 'Record the extracted fields.', parameters: schema } }], tool_choice: { type: 'function', function: { name } } });
 	await logUsage(orgId, model, data.usage?.prompt_tokens, data.usage?.completion_tokens, name);
