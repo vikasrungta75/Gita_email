@@ -83,7 +83,7 @@ async function checkAi() {
 	if (provider === 'anthropic') {
 		if (!v('ANTHROPIC_API_KEY')) return fail('ANTHROPIC_API_KEY', 'AI_PROVIDER is anthropic but the key is missing');
 		try {
-			const res = await fetch(`${(v('ANTHROPIC_BASE_URL') || 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models`, { headers: { 'x-api-key': v('ANTHROPIC_API_KEY'), 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout(10000) });
+			const res = await fetch(`${(v('ANTHROPIC_BASE_URL') || 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models`, { headers: { 'x-api-key': v('ANTHROPIC_API_KEY'), 'anthropic-version': '2023-06-01', ...(v('ANTHROPIC_WORKSPACE_ID') ? { 'anthropic-workspace-id': v('ANTHROPIC_WORKSPACE_ID') } : {}) }, signal: AbortSignal.timeout(10000) });
 			if (res.ok) ok('Claude', `key accepted; model ${v('ANTHROPIC_MODEL') || 'default'}`);
 			else if (res.status === 401 || res.status === 403) fail('Claude', 'key rejected (401/403). Create a new key at console.anthropic.com and paste it with no spaces or quotes');
 			else warn('Claude', `could not confirm the key (HTTP ${res.status}); check your internet connection`);

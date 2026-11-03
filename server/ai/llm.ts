@@ -80,16 +80,27 @@ async function logUsage(orgId: number | null, model: string, inTok: number, outT
 	]).catch(() => {});
 }
 
+/**
+ * Headers for every Claude API call. The API key and the workspace ID are separate values:
+ * ANTHROPIC_WORKSPACE_ID (optional) is sent as its own header so calls are attributed to that workspace.
+ */
+export function anthropicHeaders(): Record<string, string> {
+	const h: Record<string, string> = {
+		'x-api-key': process.env.ANTHROPIC_API_KEY!,
+		'anthropic-version': '2023-06-01',
+		'content-type': 'application/json',
+	};
+	const workspace = (process.env.ANTHROPIC_WORKSPACE_ID || '').trim();
+	if (workspace) h['anthropic-workspace-id'] = workspace;
+	return h;
+}
+
 async function anthropicCall(body: any) {
 	await pace();
 	for (let i = 0; i < 4; i++) {
 		const res = await fetch(`${(process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '')}/v1/messages`, {
 			method: 'POST',
-			headers: {
-				'x-api-key': process.env.ANTHROPIC_API_KEY!,
-				'anthropic-version': '2023-06-01',
-				'content-type': 'application/json',
-			},
+			headers: anthropicHeaders(),
 			body: JSON.stringify(body),
 			signal: AbortSignal.timeout(120_000),
 		});
