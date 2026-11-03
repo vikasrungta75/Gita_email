@@ -1324,7 +1324,7 @@ r.post('/api/system/old-unanswered', async (ctx) => {
 // ── Re-analyse recent email (Settings) ──────────────────────────────────────
 // Threads are picked by their latest message, so a thread with any new inbound, sent or internal mail in the
 // window is re-read in full (up to the 14 newest messages, sent replies included).
-const reanalyseDays = (v: unknown) => Math.max(1, Math.min(365, Math.floor(Number(v)) || 7));
+const reanalyseDays = (v: unknown) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && v !== null && v !== '' ? Math.max(1, Math.min(365, n)) : 7; };
 r.get('/api/system/reanalyse', async (ctx) => {
 	requireRole(ctx.user, 'admin');
 	const days = reanalyseDays(ctx.query.get('days'));
