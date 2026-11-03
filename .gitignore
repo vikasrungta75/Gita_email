@@ -7,3 +7,6 @@ dist
 .DS_Store
 scratch/
 scratch/
+
+# Local edition: database files and backups stay on this computer
+data/

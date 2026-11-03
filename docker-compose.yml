@@ -1,0 +1,38 @@
+# Gita Mail, local edition. Start: docker compose up -d   Stop: docker compose down
+# The database lives in ./data/postgres on this computer. Settings come from .env in this folder.
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitamail
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-gitamail-local}
+      POSTGRES_DB: gitamail
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/backup:/backup
+    ports:
+      - "127.0.0.1:5433:5432"   # only this computer can reach the database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitamail -d gitamail"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # These override the same names in .env so the app uses the local database and address
+      DATABASE_URL: postgres://gitamail:${LOCAL_DB_PASSWORD:-gitamail-local}@db:5432/gitamail?sslmode=disable
+      APP_URL: ${LOCAL_APP_URL:-http://localhost:8888}
+      PORT: "8888"
+      HOST: 0.0.0.0
+      NETLIFY: ""
+      URL: ""
+    ports:
+      - "127.0.0.1:8888:8888"   # change to "8888:8888" to let other computers on your network open it
+    depends_on:
+      db:
+        condition: service_healthy

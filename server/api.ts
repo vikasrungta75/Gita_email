@@ -970,6 +970,11 @@ async function kickWorker(mailboxId?: number) {
 		}).catch((e) => console.error('[kick]', e.message));
 		return { queued: true };
 	}
+	// Local edition: run in the background so the browser does not wait minutes for a large mailbox
+	if (process.env.LOCAL_MODE) {
+		runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }).catch((e) => console.error('[kick]', e.message));
+		return { queued: true };
+	}
 	return { queued: false, result: await runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }) };
 }
 

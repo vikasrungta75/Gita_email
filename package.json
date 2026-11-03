@@ -2,7 +2,7 @@
   "name": "gita-mail",
   "version": "1.0.0",
   "private": true,
-  "description": "remail by Ravity — AI email intelligence for Wheel King TransHaul",
+  "description": "remail by Ravity \u2014 AI email intelligence for Wheel King TransHaul",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,7 +13,9 @@
     "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed.ts",
     "create-admin": "tsx scripts/create-admin.ts",
-    "test": "tsx scripts/test-pipeline.ts"
+    "test": "tsx scripts/test-pipeline.ts",
+    "local": "tsx scripts/local-server.ts",
+    "local:start": "vite build && tsx scripts/local-server.ts"
   },
   "engines": {
     "node": ">=20"
