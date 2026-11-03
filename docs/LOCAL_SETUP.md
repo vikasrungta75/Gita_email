@@ -100,6 +100,8 @@ to start at login (Docker Desktop → Settings → General).
 
 ## 5B. Start without Docker
 
+Full step-by-step guide for computers that already have PostgreSQL and Node.js: [LOCAL_SETUP_NODE.md](LOCAL_SETUP_NODE.md). Short version:
+
 1. Install **Node.js 22 LTS** from nodejs.org.
 2. Install **PostgreSQL 17** (Windows: the EDB installer from postgresql.org; Mac: Postgres.app).
    Note the password you set for the `postgres` user.

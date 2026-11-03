@@ -79,7 +79,7 @@ Gita Mail reads the Gita Press mailboxes (each person's own inbox, plus shared o
 
 ## Run on your own computer (local edition)
 
-Run everything (web app, database, mail reading) on one computer with Docker or Node.js, using the same `.env` as Netlify. Step-by-step guide: [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
+Run everything (web app, database, mail reading) on one computer with Docker or Node.js, using the same `.env` as Netlify. Guides: [with your own PostgreSQL and Node.js](docs/LOCAL_SETUP_NODE.md) or [with Docker](docs/LOCAL_SETUP.md). Settings template: `local/env.local.template`; check before starting with `npm run local:check`.
 
 ```
 docker compose up -d --build     # then open http://localhost:8888

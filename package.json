@@ -15,7 +15,9 @@
     "create-admin": "tsx scripts/create-admin.ts",
     "test": "tsx scripts/test-pipeline.ts",
     "local": "tsx scripts/local-server.ts",
-    "local:start": "vite build && tsx scripts/local-server.ts"
+    "local:start": "vite build && tsx scripts/local-server.ts",
+    "local:check": "tsx scripts/local-check.ts",
+    "local:keys": "tsx scripts/local-keys.ts"
   },
   "engines": {
     "node": ">=20"
