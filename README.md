@@ -28,6 +28,24 @@ Gita Mail reads the Gita Press mailboxes (each person's own inbox, plus shared o
 * Category report (Email → Category report): groups as headings and subgroups as subheadings, with threads, waiting replies, negative and red threads, drafts and first-reply time. Print or download as CSV.
 * Threads analysed before subgroups existed are sorted by the rules engine in the background, with no AI cost.
 
+**Stock, addresses and inventory** ([guide](docs/STOCK_AND_INVENTORY.md))
+* Upload the Tally stock summaries in two slots, head office (Main, Retail and Semi-finished) and branches. The Excel files are used as exported, and every upload is kept.
+* Drafts quote exact stock and the highest batch price for Gorakhpur and the branch nearest the reader (from city, PIN or state). Books in Hindi or English letters are matched to Tally names, and an optional Hindi title list can be uploaded.
+* Readers who ask for an address get the branch they named, or the full official list (English and Hindi).
+* Inventory → Stock and sales covers:
+  * stock status and estimated sales trends by branch
+  * top sellers
+  * what to send to each branch, using days of cover and lead time
+  * books each branch should stock
+  * slow movers to transfer
+  * books readers ask for, and back-in-stock follow-ups.
+
+  Every table can be downloaded as Excel.
+
+**Reasons for contacting**
+* Each thread gets one or more of 22 reasons, for example Kalyan, book order, order tracking, international, bulk order, dealer, content or printing suggestions and seva. The customer record collects all of them.
+* The customer database filters by "contacted for" (any or all) and "never contacted for", plus city, country and language, with Excel export and per-customer upsell and cross-sell ideas.
+
 **Analysis built for Gita Press**
 * Email types:
   * reader and customer service

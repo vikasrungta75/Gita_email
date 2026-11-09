@@ -17,7 +17,7 @@ import {
 import { googleAuthorizeUrl, googleConfigured, googleExchangeCode, googleSsoEnabled, googleSigninConnectsMailbox, googleSigninScopes, googleSignIn, googleTestMailbox, serviceAccount, workspaceConfigured, GMAIL_READONLY, GMAIL_SEND, gmailSendEnabled, loadServiceAccount, parseServiceAccount } from './connectors/gmail';
 import { parseEml } from './connectors/upload';
 import { ingestMessages } from './ingest';
-import { analyseConversation, analysePending, backfillHealthHistory, updateCustomerHealth } from './analyze';
+import { analyseConversation, analysePending, backfillHealthHistory, refreshCustomerPurposes, updateCustomerHealth } from './analyze';
 import { runTick, syncMailbox } from './worker';
 import { aiModel, aiPaused, aiProvider } from './ai/llm';
 import { appUrl, emailLayout, esc, mailerProvider, sendEmail } from './mailer';
@@ -33,6 +33,11 @@ import { normaliseSubcategory, subgroupOf, taxonomyTree } from './ai/taxonomy';
 import { dismissDraft, fillDraft, getDraft, getDraftForConversation, listDrafts, saveDraft, sendDraft } from './drafts';
 import { BUSINESS_CATEGORIES, BUSINESS_LABELS, CATEGORIES, CATEGORY_LABELS, PROPOSAL_STAGES, type BusinessCategory } from './ai/types';
 import type { MailboxRow } from './connectors/types';
+import { currentStock, deleteUpload, importStock, importTitles, inventorySettings, listUploads, saveInventorySettings, stockForConversation, titlesSummary, titlesTemplate } from './stock/stock';
+import { crossSell, customerSuggestions, demand as inventoryDemand, overview as inventoryOverview, rangeGaps, replenishment, slowMovers, stockStatus, topSellers } from './stock/inventory';
+import { DIRECTORY, HQ_CONTACT, POST_NOTE, POST_NOTE_HI } from './directory';
+import { PURPOSES, PURPOSE_HINTS, PURPOSE_LABELS, normalisePurposes } from './ai/purposes';
+import { writeXlsx } from './xlsx';
 
 const r = new Router();
 
@@ -325,7 +330,12 @@ r.patch('/api/conversations/:id', async (ctx) => {
 	requireRole(ctx.user, 'analyst');
 	const id = Number(ctx.params.id);
 	await assertConversationAccess(ctx, id);
-	const { status, assigneeId, businessCategory, subcategory, proposalStage } = ctx.body || {};
+	const { status, assigneeId, businessCategory, subcategory, proposalStage, purposes } = ctx.body || {};
+	if (Array.isArray(purposes)) {
+		await q('update conversations set purposes=$2, purposes_locked=true, purposes_at=now() where id=$1', [id, normalisePurposes(purposes)]);
+		const cc = await one<any>('select customer_id from conversations where id=$1', [id]);
+		if (cc?.customer_id) await refreshCustomerPurposes(cc.customer_id);
+	}
 	if (status && !['open', 'in_progress', 'resolved', 'ignored'].includes(status)) throw new HttpError(400, 'Invalid status');
 	if (businessCategory) {
 		if (!(BUSINESS_CATEGORIES as readonly string[]).includes(businessCategory)) throw new HttpError(400, 'Invalid category');
@@ -355,7 +365,7 @@ r.patch('/api/conversations/:id', async (ctx) => {
 	}
 	const c = await one<any>('select customer_id from conversations where id=$1', [id]);
 	if (c?.customer_id) await updateCustomerHealth(c.customer_id);
-	await audit(ctx, 'conversation.updated', 'conversation', id, { status, assigneeId });
+	await audit(ctx, 'conversation.updated', 'conversation', id, { status, assigneeId, purposes });
 	return { success: true };
 });
 
@@ -626,6 +636,7 @@ r.post('/api/customers/merge', async (ctx) => {
 		await q('delete from customers where id=$1', [s]);
 	}
 	await updateCustomerHealth(target);
+	await refreshCustomerPurposes(target);
 	await audit(ctx, 'customer.merged', 'customer', target, { sources });
 	return { success: true };
 });
@@ -1187,7 +1198,7 @@ r.patch('/api/settings', async (ctx) => {
 		if (settings.replyKnowledge !== undefined) next.replyKnowledge = String(settings.replyKnowledge).slice(0, 6000);
 		if (settings.replySignature !== undefined) next.replySignature = String(settings.replySignature).slice(0, 600);
 		if (settings.replyFooter !== undefined) (next as any).replyFooter = !!settings.replyFooter;
-		if (Array.isArray(settings.branches)) (next as any).branches = settings.branches.slice(0, 60).map((b: any) => ({ city: String(b.city || '').slice(0, 60), state: String(b.state || '').slice(0, 60), address: String(b.address || '').trim().slice(0, 300), phone: String(b.phone || '').trim().slice(0, 120), email: String(b.email || '').trim().slice(0, 120) })).filter((b: any) => b.city);
+		if (Array.isArray(settings.branches)) (next as any).branches = settings.branches.slice(0, 60).map((b: any) => ({ city: String(b.city || '').slice(0, 60), state: String(b.state || '').slice(0, 60), address: String(b.address || '').trim().slice(0, 300), address_hi: String(b.address_hi || '').trim().slice(0, 300), phone: String(b.phone || '').trim().slice(0, 120), email: String(b.email || '').trim().slice(0, 120) })).filter((b: any) => b.city);
 		if (settings.defaultBackfillDays !== undefined) next.defaultBackfillDays = Math.max(7, Math.min(365, Number(settings.defaultBackfillDays) || 90));
 	}
 	await q(`update organisations set name=coalesce($2,name), internal_domains=coalesce($3,internal_domains), settings=$4 where id=$1`, [
@@ -1353,16 +1364,124 @@ r.post('/api/system/reanalyse', async (ctx) => {
 	return { marked, done, remaining: Math.max(0, marked - done) };
 });
 
+
+// ── Stock (Tally uploads), addresses and inventory ──────────────────────────
+const fileBytes = (b: any) => {
+	const data = String(b?.data || '').replace(/^data:[^,]*,/, '');
+	if (!data) throw new HttpError(400, 'No file received');
+	return new Uint8Array(Buffer.from(data, 'base64'));
+};
+const xlsxResponse = (bytes: Uint8Array, name: string) => new Response(bytes as any, {
+	headers: { 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'content-disposition': `attachment; filename="${name}"` },
+});
+r.get('/api/stock/uploads', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	const [uploads, titles, settings, cur] = await Promise.all([listUploads(ctx.user!.orgId), titlesSummary(ctx.user!.orgId), inventorySettings(ctx.user!.orgId), currentStock(ctx.user!.orgId)]);
+	return { uploads, titles, settings, asOf: cur.asOf, locations: DIRECTORY.map((d) => ({ key: d.key, label: d.city, noStock: !!d.no_stock, hq: !!d.head_office })) };
+});
+r.post('/api/stock/upload', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const { slot, fileName } = ctx.body || {};
+	const res = await importStock(ctx.user!.orgId, ctx.user!.id, slot, String(fileName || 'stock.xlsx'), fileBytes(ctx.body));
+	await audit(ctx, 'stock.uploaded', 'stock_upload', res.upload.id, { slot, fileName, period: res.period, rows: res.rows, replaced: res.replaced });
+	return res;
+});
+r.del('/api/stock/uploads/:id', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const res = await deleteUpload(ctx.user!.orgId, Number(ctx.params.id));
+	await audit(ctx, 'stock.upload_deleted', 'stock_upload', Number(ctx.params.id));
+	return res;
+});
+r.post('/api/stock/titles', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const res = await importTitles(ctx.user!.orgId, String(ctx.body?.fileName || 'titles.xlsx'), fileBytes(ctx.body));
+	await audit(ctx, 'stock.titles_uploaded', 'book_titles', null, res);
+	return res;
+});
+r.get('/api/stock/titles/template', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	return xlsxResponse(await titlesTemplate(ctx.user!.orgId), 'gitamail-hindi-titles.xlsx');
+});
+r.put('/api/stock/settings', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const res = await saveInventorySettings(ctx.user!.orgId, ctx.body || {});
+	await audit(ctx, 'stock.settings_updated', null, null, res as any);
+	return res;
+});
+r.get('/api/stock/directory', async () => ({ directory: DIRECTORY, postNote: POST_NOTE, postNoteHi: POST_NOTE_HI, hq: HQ_CONTACT }));
+r.get('/api/conversations/:id/stock', async (ctx) => {
+	const id = Number(ctx.params.id);
+	await assertConversationAccess(ctx, id);
+	return stockForConversation(ctx.user!.orgId, id);
+});
+
+/** Inventory tables can be downloaded as Excel with ?format=xlsx */
+const inv = (path: string, fn: (ctx: Ctx) => Promise<any>, sheet?: (res: any) => { name: string; header: string[]; rows: unknown[][] }) =>
+	r.get(path, async (ctx) => {
+		requireRole(ctx.user, 'analyst');
+		const res = await fn(ctx);
+		if (ctx.query.get('format') === 'xlsx' && sheet) {
+			const sh = sheet(res);
+			await audit(ctx, 'export.inventory', null, null, { path, rows: sh.rows.length });
+			return xlsxResponse(writeXlsx([sh]), `gitamail-${sh.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+		}
+		return res;
+	});
+const qp = (ctx: Ctx, k: string) => ctx.query.get(k) || undefined;
+inv('/api/inventory/overview', (ctx) => inventoryOverview(ctx.user!.orgId), (res) => ({
+	name: 'Branch summary', header: ['Location', 'Stock as of', 'Copies in stock', 'Stock value (₹)', 'Titles in stock', 'Est. sales per day', 'Days of cover', 'Titles running low', 'Selling titles out of stock'],
+	rows: res.branches.map((b: any) => [b.label, b.asOf, b.qty, b.value, b.titles, b.salesPerDay, b.cover, b.lowTitles, b.outTitles]),
+}));
+inv('/api/inventory/stock', (ctx) => stockStatus(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), status: qp(ctx, 'status'), q: qp(ctx, 'q'), limit: ctx.query.get('format') === 'xlsx' ? 20000 : 500 }), (res) => ({
+	name: `Stock ${res.label}`, header: ['Code', 'Title', 'Hindi title', 'Language', 'In stock', 'Semi-finished', 'Price (₹)', 'Value (₹)', `Sold (last ${res.salesDays} days)`, 'Per month', 'Days of cover', 'Status'],
+	rows: res.rows.map((x: any) => [x.code, x.name, x.hindi, x.language, x.qty, x.semi, x.price, x.value, x.sold, x.perMonth, x.cover, x.status]),
+}));
+inv('/api/inventory/top', (ctx) => topSellers(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), months: intParam(ctx.query.get('months')), limit: ctx.query.get('format') === 'xlsx' ? 1000 : 50 }), (res) => ({
+	name: 'Top sellers', header: ['Code', 'Title', 'Language', 'Copies sold', 'Sales value (₹)', 'Top branches', 'Gorakhpur stock', 'Price (₹)'],
+	rows: res.rows.map((x: any) => [x.code, x.name, x.language, x.qty, x.value, x.branches.map((b: any) => `${b.label} ${b.qty}`).join('; '), x.hqQty, x.price]),
+}));
+inv('/api/inventory/replenishment', (ctx) => replenishment(ctx.user!.orgId, { location: qp(ctx, 'location') }), (res) => ({
+	name: 'Replenishment', header: ['Branch', 'Code', 'Title', 'Language', 'In stock', 'Sells per month', 'Days of cover', 'Send', 'Gorakhpur stock', 'Can send now', 'Urgency', 'Season factor'],
+	rows: res.rows.map((x: any) => [x.label, x.code, x.name, x.language, x.qty, x.perMonth, x.cover, x.send, x.hqQty, x.canSend, x.urgency, x.season]),
+}));
+inv('/api/inventory/range', (ctx) => rangeGaps(ctx.user!.orgId, { location: qp(ctx, 'location') }), (res) => ({
+	name: 'Range gaps', header: ['Branch', 'Code', 'Title', 'Language', 'Expected sales per month', 'Sells at', 'Gorakhpur stock', 'Price (₹)'],
+	rows: res.rows.map((x: any) => [x.label, x.code, x.name, x.language, x.expectedPerMonth, x.sellsAt.join(', '), x.hqQty, x.price]),
+}));
+inv('/api/inventory/slow', (ctx) => slowMovers(ctx.user!.orgId, { location: qp(ctx, 'location') }), (res) => ({
+	name: 'Slow movers', header: ['Branch', 'Code', 'Title', 'Language', 'In stock', 'Value (₹)', 'Sells per month', 'Days of cover', 'Move to', 'Copies to move'],
+	rows: res.rows.map((x: any) => [x.label, x.code, x.name, x.language, x.qty, x.value, x.perMonth, x.cover ?? 'no sales', x.moveTo?.label || '', x.moveTo?.qty || '']),
+}));
+inv('/api/inventory/demand', (ctx) => inventoryDemand(ctx.user!.orgId), (res) => ({
+	name: 'Back in stock', header: ['Customer', 'Email', 'Book code', 'Book', 'Asked on', 'Gorakhpur stock now'],
+	rows: res.backInStock.map((x: any) => [x.name, x.email, x.code, x.bookName, x.requested_at, x.hqQty]),
+}));
+inv('/api/inventory/cross-sell', (ctx) => crossSell(ctx.user!.orgId));
+r.get('/api/customers/:id/suggestions', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	const res = await customerSuggestions(ctx.user!.orgId, Number(ctx.params.id));
+	if (!res) throw new HttpError(404, 'Customer not found');
+	return res;
+});
+r.get('/api/purposes', async () => ({ purposes: PURPOSES.map((k) => ({ key: k, label: PURPOSE_LABELS[k], hint: PURPOSE_HINTS[k] })) }));
+
 // ── Customer database (Admin) ───────────────────────────────────────────────
 r.get('/api/customer-db', async (ctx) => {
 	requireRole(ctx.user, 'analyst');
 	const res = await listCustomerDb(ctx.user!.orgId, ctx.query);
-	if (ctx.query.get('format') !== 'csv') return res;
-	const cols = ['name', 'type', 'organisation', 'emails', 'phones', 'address', 'city', 'state', 'pin', 'language', 'order_refs', 'subscriber_numbers', 'books', 'gstin', 'threads', 'waiting', 'first_contact', 'last_contact_at', 'notes'];
-	const cell = (v: any) => { const s = Array.isArray(v) ? v.join('; ') : v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-	const lines = [cols.join(','), ...res.rows.map((r: any) => cols.map((c) => cell(c in r.p ? (r.p as any)[c] : r[c])).join(','))];
-	await audit(ctx, 'export.customer_db', 'customer', null, { rows: res.rows.length });
-	return new Response(lines.join('\n'), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="gitamail-customers-${new Date().toISOString().slice(0, 10)}.csv"` } });
+	const format = ctx.query.get('format');
+	if (format !== 'csv' && format !== 'xlsx') return res;
+	const cols = ['name', 'type', 'organisation', 'emails', 'phones', 'address', 'city', 'state', 'pin', 'country', 'language', 'purposes', 'order_refs', 'subscriber_numbers', 'books', 'gstin', 'threads', 'waiting', 'first_contact', 'last_contact_at', 'notes'];
+	const heads = ['Name', 'Type', 'Organisation', 'Emails', 'Phones', 'Address', 'City', 'State', 'PIN', 'Country', 'Language', 'Reasons for contacting', 'Order numbers', 'Kalyan subscriber numbers', 'Books asked about', 'GSTIN', 'Threads', 'Waiting', 'First contact', 'Last contact', 'Notes'];
+	const val = (r: any, c: string) => (c === 'purposes' ? (r.purposes || []).map((x: string) => (PURPOSE_LABELS as any)[x] || x) : c in r.p ? (r.p as any)[c] : r[c]);
+	const flat = (v: any) => (Array.isArray(v) ? v.join('; ') : v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : v);
+	await audit(ctx, 'export.customer_db', 'customer', null, { rows: res.rows.length, format });
+	const stamp = new Date().toISOString().slice(0, 10);
+	if (format === 'xlsx') return xlsxResponse(writeXlsx([{ name: 'Customers', header: heads, rows: res.rows.map((r: any) => cols.map((c) => flat(val(r, c)))) }]), `gitamail-customers-${stamp}.xlsx`);
+	const cell = (v: any) => { const s = String(flat(v)); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+	const lines = [heads.join(','), ...res.rows.map((r: any) => cols.map((c) => cell(val(r, c))).join(','))];
+	// a byte-order mark so Excel opens Hindi text correctly
+	return new Response(`\uFEFF${lines.join('\n')}`, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="gitamail-customers-${stamp}.csv"` } });
 });
 r.patch('/api/customer-db/:id', async (ctx) => {
 	requireRole(ctx.user, 'analyst');

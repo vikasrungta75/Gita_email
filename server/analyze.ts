@@ -5,7 +5,9 @@ import { guessSubcategory, heuristicAnalyse } from './ai/heuristic';
 import { normaliseSubcategory } from './ai/taxonomy';
 import { getTemplate, renderTemplate, templatesForGroup } from './templates';
 import { matchReference } from './reference';
-import { profileForPrompt } from './profiles';
+import { merged as mergedProfile, profileForPrompt } from './profiles';
+import { draftAddition, recordRequests, stockContext } from './stock/stock';
+import { NO_PURPOSE_GROUPS, guessPurposes, normalisePurposes, purposesFromSubgroup } from './ai/purposes';
 import type { ThreadInput } from './ai/types';
 import { getOrg } from './settings';
 import { score, healthScore, healthStatus } from './scoring';
@@ -58,6 +60,7 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 	emails.reverse();
 	if (!emails.length) return null;
 
+	const customerRow = conv.customer_id ? await one<any>('select profile, profile_manual from customers where id=$1', [conv.customer_id]) : null;
 	const input: ThreadInput = {
 		conversationId,
 		customerName: conv.customer_name || '',
@@ -67,7 +70,7 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 		isAutomated: !!conv.is_automated,
 		replyKnowledge: org.settings.replyKnowledge || '',
 		replySignature: org.settings.replySignature || '',
-		customerProfile: conv.customer_id ? profileForPrompt((await one<any>('select profile, profile_manual from customers where id=$1', [conv.customer_id])) || {}) : '',
+		customerProfile: customerRow ? profileForPrompt(customerRow) : '',
 		messages: emails.map((e, idx) => {
 			const body = (e.body_clean || e.body_text || '').slice(0, 3000);
 			return {
@@ -83,6 +86,7 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 		}),
 	};
 
+	let stock: Awaited<ReturnType<typeof stockContext>> | null = null;
 	// the rules engine's guess of the group picks which default templates and reference data go into the prompt
 	const guess = heuristicAnalyse(input);
 	if (!input.isAutomated && !input.isInternal) {
@@ -92,6 +96,14 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 			input.reference = await matchReference(org.id, inboundText);
 		} catch (e: any) {
 			console.error('[analyse] templates/reference', e.message);
+		}
+		// live stock for the books the reader mentions, and Gita Press addresses when they ask
+		try {
+			const p = customerRow ? mergedProfile(customerRow) : {};
+			stock = await stockContext(org.id, inboundText, { city: p.city, state: p.state, pin: p.pin, address: p.address, country: p.country });
+			if (stock.prompt) input.stockInfo = stock.prompt;
+		} catch (e: any) {
+			console.error('[analyse] stock', e.message);
 		}
 	}
 
@@ -116,7 +128,25 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 				});
 		}
 	}
+	// without the AI, stock and addresses are added to the draft as plain text
+	if (model.startsWith('remail-heuristic') && analysis.requires_reply && analysis.suggested_reply && stock) {
+		const lastIn = [...input.messages].reverse().find((m) => m.direction === 'inbound');
+		const hindi = ((lastIn?.body || '').match(/[\u0900-\u097F]/g) || []).length > ((lastIn?.body || '').match(/[A-Za-z]/g) || []).length / 3;
+		const extra = draftAddition(stock, hindi);
+		if (extra) {
+			const sig = input.replySignature || '';
+			const at = sig && analysis.suggested_reply.lastIndexOf(sig.split('\n')[0]);
+			analysis.suggested_reply = typeof at === 'number' && at > 0
+				? `${analysis.suggested_reply.slice(0, at).trimEnd()}\n\n${extra}\n\n${analysis.suggested_reply.slice(at)}`
+				: `${analysis.suggested_reply.trimEnd()}\n\n${extra}`;
+		}
+	}
 	const external = !input.isInternal && !input.isAutomated;
+	// why the reader wrote: the AI's list plus what follows from the subgroup (none for internal, automated and supplier threads)
+	const purposes = !external || (NO_PURPOSE_GROUPS as string[]).includes(analysis.business_category)
+		? []
+		: normalisePurposes([...(analysis.purposes || []), ...purposesFromSubgroup(analysis.business_category, analysis.subcategory), ...(stock?.abroad ? ['international'] : [])].concat(
+			(analysis.purposes || []).length ? [] : guessPurposes(input.messages.filter((m) => m.direction === 'inbound').map((m) => `${m.subject}\n${m.body}`).join('\n'), analysis.business_category, analysis.subcategory)));
 	if (!external) {
 		// internal and automated threads are not rated as customer risk
 		analysis.legal_or_churn_signal = false;
@@ -157,6 +187,10 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 			analysis.subcategory,
 		],
 	);
+
+	await q(`update conversations set purposes = case when purposes_locked then purposes else $2 end, purposes_at=now() where id=$1`, [conversationId, purposes]);
+	if (conv.customer_id) await refreshCustomerPurposes(conv.customer_id);
+	if (stock && external) await recordRequests(conv.org_id, conversationId, conv.customer_id, stock);
 
 	// a complete draft reply, kept in the app until someone presses Send
 	try {
@@ -330,5 +364,31 @@ export async function backfillSubcategories(orgId: number, limit = 400) {
 		const sub = guessSubcategory(r.business_category, `${r.subject || ''}\n${r.body || ''}\n${r.summary || ''}`);
 		await q('update conversations set subcategory=$2 where id=$1 and subcategory is null', [r.id, sub]);
 	}
+	return rows.length;
+}
+
+/** The customer record collects every purpose from all their threads. */
+export async function refreshCustomerPurposes(customerId: number) {
+	await q(
+		`update customers set purposes = coalesce((select array_agg(distinct p order by p) from conversations c, unnest(c.purposes) p where c.customer_id=$1), '{}') where id=$1`,
+		[customerId],
+	);
+}
+
+/** Threads analysed before purposes existed get them from the rules engine in the background (no AI cost). */
+export async function backfillPurposes(orgId: number, limit = 400) {
+	const rows = await q<any>(
+		`select c.id, c.customer_id, c.business_category, c.subcategory, c.is_internal, c.is_automated, c.subject,
+		   (select string_agg(left(coalesce(e.body_clean, e.body_text, ''), 1500), ' ') from (select * from emails e where e.conversation_id=c.id and e.direction='inbound' and not e.is_duplicate order by e.sent_at desc limit 3) e) as body
+		   from conversations c where c.org_id=$1 and c.purposes_at is null and c.analysed_at is not null and not c.needs_analysis order by c.last_message_at desc limit $2`,
+		[orgId, limit],
+	);
+	const customers = new Set<number>();
+	for (const r of rows) {
+		const purposes = r.is_internal || r.is_automated || !r.customer_id ? [] : guessPurposes(`${r.subject || ''}\n${r.body || ''}`, r.business_category, r.subcategory);
+		await q('update conversations set purposes = case when purposes_locked then purposes else $2 end, purposes_at=now() where id=$1', [r.id, purposes]);
+		if (r.customer_id) customers.add(r.customer_id);
+	}
+	for (const c of customers) await refreshCustomerPurposes(c);
 	return rows.length;
 }

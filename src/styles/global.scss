@@ -137,6 +137,9 @@ a {
 .gap-4 {
 	gap: 4px;
 }
+.gap-8 {
+	gap: 8px;
+}
 .gap-12 {
 	gap: 12px;
 }
@@ -2069,6 +2072,11 @@ textarea.input.tpl-edit {
 	}
 	@media (max-width: 900px) {
 		flex-wrap: wrap;
+	}
+	/* strips with drop-down checklists wrap instead of scrolling, so the lists are not clipped */
+	&.wrap {
+		flex-wrap: wrap;
+		overflow: visible;
 	}
 }
 .drafts-list .card-head select.drop {

@@ -6,6 +6,7 @@
 import { q } from '../db';
 import { heuristicAnalyse } from './heuristic';
 import { normaliseSubcategory, taxonomyForPrompt } from './taxonomy';
+import { normalisePurposes, purposesForPrompt } from './purposes';
 import { ANALYSIS_SCHEMA, BUSINESS_CATEGORIES, CATEGORIES, PROPOSAL_STAGES, type Analysis, type ThreadInput } from './types';
 
 export type Provider = 'gemini' | 'anthropic' | 'openai' | 'azure' | 'heuristic';
@@ -50,11 +51,15 @@ Rules:
 - subcategory: pick exactly one subgroup key from the list for the business_category you chose:
 ${taxonomyForPrompt()}
 - Reply templates: when a default template is given for the subgroup you chose, follow its structure, order and wording closely, translating it if the customer wrote in another language. Replace {{name}}, {{order_ref}}, {{book}} and similar fields with facts from the emails, or with a [[provide: …]] placeholder when the fact is not known. Keep the template's own [[provide: …]] placeholders unless the emails or reference information answer them. Answer anything the customer asked that the template does not cover.
-- Catalogue and FAQ entries given under "Matched reference data" are facts you may rely on (title, price, stock, policy). Prefer them over placeholders.`;
+- Catalogue and FAQ entries given under "Matched reference data" are facts you may rely on (title, price, stock, policy). Prefer them over placeholders.
+- Stock and addresses: when "Stock and addresses" information is given, it is the live Tally stock. Tell the reader the exact number of copies and the price for each book they asked about, for Gorakhpur and, when given, the branch nearest to them (name the branch). A book shown as out of stock is not available there now; never promise a date. Books are sent by post and abroad only from Gorakhpur. When several editions or languages match, list them with their codes and ask which one the reader wants. Never state stock or prices for a book that is not listed; use a [[provide: …]] placeholder instead.
+- When the reader asks for an address, give exactly the address(es) listed under "Stock and addresses" (the place they named, or the full list when they named none), with phone numbers and e-mail as listed. Use the Hindi lines in a Hindi reply. Never invent an address, phone number or e-mail.
+- purposes: list every reason the external party contacted Gita Press in this thread, from: ${purposesForPrompt()}. Kalyan is one purpose whatever the Kalyan matter. Use international whenever the reader is outside India. Empty list for internal, automated and supplier threads.`;
 
 function buildPrompt(input: ThreadInput): string {
 	const lines = [
 		input.replyKnowledge ? `Reference information from ${input.orgName} (use it in replies when relevant):\n${input.replyKnowledge.slice(0, 4000)}\n` : '',
+		input.stockInfo ? `Stock and addresses (Gita Press records, use them in the reply):\n${input.stockInfo.slice(0, 6000)}\n` : '',
 		input.reference?.length ? `Matched reference data:\n${input.reference.map((r) => `- [${r.kind}] ${r.title}: ${r.text}`).join('\n').slice(0, 4000)}\n` : '',
 		input.replyTemplates?.length ? `Default reply templates for the likely group (${input.replyTemplates[0].group}):\n${input.replyTemplates.map((t) => `### ${t.subgroup} (${t.label})\n${t.body}`).join('\n\n').slice(0, 6000)}\n` : '',
 		`Reply signature:\n${input.replySignature || `Regards,\n${input.orgName}`}\n`,
@@ -298,6 +303,7 @@ function coerce(raw: any, fallback: Analysis): Analysis {
 	return {
 		business_category: bc,
 		subcategory: normaliseSubcategory(bc, raw.subcategory || (bc === fallback.business_category ? fallback.subcategory : '')),
+		purposes: Array.isArray(raw.purposes) ? normalisePurposes(raw.purposes) : fallback.purposes,
 		proposal: pr,
 		summary: String(raw.summary || fallback.summary).slice(0, 1200),
 		sentiment: pick(raw.sentiment, ['positive', 'neutral', 'negative'] as const, fallback.sentiment),

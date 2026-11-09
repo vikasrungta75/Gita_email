@@ -7,47 +7,43 @@
 import { one } from './db';
 import { getOrg } from './settings';
 import { merged } from './profiles';
+import { DIRECTORY, placeInText } from './directory';
 
-export interface Branch { city: string; state: string; address: string; phone?: string; email?: string }
+export interface Branch { city: string; state: string; address: string; phone?: string; email?: string; address_hi?: string; key?: string }
 
 export const WEBSITE = 'https://www.gitapress.org';
 /** From gitapress.org/contactUs */
 export const HEAD_OFFICE: Branch = {
+	key: 'gorakhpur',
 	city: 'Gorakhpur',
 	state: 'Uttar Pradesh',
 	address: 'Gita Press, P.O. Gita Press, Gorakhpur 273005, Uttar Pradesh, India',
+	address_hi: 'गीताप्रेस, पो० गीताप्रेस, गोरखपुर 273005, उत्तर प्रदेश',
 	phone: 'Books +91 92354 00244 · Kalyan +91 92354 00242',
 	email: 'booksales@gitapress.org',
 };
-/** Branch cities (Wikipedia, "Gita Press"); addresses to be filled in by Gita Press. */
-export const BRANCH_CITIES: [string, string][] = [
-	['Bengaluru', 'Karnataka'], ['Bhilwara', 'Rajasthan'], ['Chennai', 'Tamil Nadu'], ['Coimbatore', 'Tamil Nadu'], ['Cuttack', 'Odisha'], ['Delhi', 'Delhi'],
-	['Haridwar', 'Uttarakhand'], ['Hyderabad', 'Telangana'], ['Indore', 'Madhya Pradesh'], ['Jalgaon', 'Maharashtra'], ['Kanpur', 'Uttar Pradesh'], ['Kathmandu', 'Nepal'],
-	['Kolkata', 'West Bengal'], ['Mumbai', 'Maharashtra'], ['Nagpur', 'Maharashtra'], ['Patna', 'Bihar'], ['Raipur', 'Chhattisgarh'], ['Ranchi', 'Jharkhand'],
-	['Rishikesh', 'Uttarakhand'], ['Surat', 'Gujarat'], ['Varanasi', 'Uttar Pradesh'],
-];
-const ALIASES: Record<string, string[]> = {
-	bengaluru: ['bangalore', 'बेंगलुरु', 'बैंगलोर'], chennai: ['madras', 'चेन्नई'], delhi: ['new delhi', 'नई दिल्ली', 'दिल्ली'], kolkata: ['calcutta', 'कोलकाता', 'कलकत्ता'],
-	mumbai: ['bombay', 'मुंबई'], varanasi: ['banaras', 'benares', 'kashi', 'वाराणसी', 'काशी'], kanpur: ['कानपुर'], patna: ['पटना'], haridwar: ['hardwar', 'हरिद्वार'],
-	rishikesh: ['ऋषिकेश'], indore: ['इंदौर'], raipur: ['रायपुर'], ranchi: ['रांची'], nagpur: ['नागपुर'], surat: ['सूरत'], hyderabad: ['secunderabad', 'हैदराबाद'],
-	cuttack: ['कटक'], kathmandu: ['काठमांडू'], gorakhpur: ['गोरखपुर'],
-};
 
+/** Branches from the official list (server/directory.ts); a value saved in Settings replaces the default. */
 export function branches(saved?: Branch[]): Branch[] {
 	const byCity = new Map((saved || []).map((b) => [b.city.toLowerCase(), b]));
-	return BRANCH_CITIES.map(([city, state]) => ({ city, state, address: '', phone: '', email: '', ...(byCity.get(city.toLowerCase()) || {}) }));
+	const pick = (v: string | undefined, d: string) => (v && v.trim() ? v : d);
+	return DIRECTORY.filter((d) => !d.head_office).map((d) => {
+		const s = byCity.get(d.city.toLowerCase()) || ({} as Partial<Branch>);
+		return {
+			key: d.key, city: d.city, state: d.state,
+			address: pick(s.address, `${d.address} ${d.pin}`), address_hi: pick(s.address_hi, `${d.address_hi} ${d.pin}`),
+			phone: pick(s.phone, d.phones.join(', ')), email: pick(s.email, d.email || ''),
+		};
+	});
 }
 
 /** The branch in the reader's city (address on file), else the head office. */
 export function pickBranch(list: Branch[], place: { city?: string; address?: string }): { branch: Branch; why: string } {
-	const hay = ` ${`${place.city || ''} ${place.address || ''}`.toLowerCase()} `;
-	for (const b of list) {
-		if (!b.address.trim()) continue;
-		const names = [b.city.toLowerCase(), ...(ALIASES[b.city.toLowerCase()] || [])];
-		if (names.some((n) => hay.includes(` ${n} `) || hay.includes(` ${n},`) || hay.includes(`,${n} `) || (place.city || '').toLowerCase() === n)) return { branch: b, why: `the reader is in ${b.city}` };
-	}
-	const known = place.city ? `no branch address is on file for ${place.city}` : 'the reader\'s city is not known';
-	return { branch: HEAD_OFFICE, why: `${known}, so the head office is used` };
+	const key = placeInText(`${place.city || ''} ${place.address || ''}`);
+	const b = key && key !== 'gorakhpur' ? list.find((x) => x.key === key && x.address.trim()) : null;
+	if (b) return { branch: b, why: `the reader is in ${b.city}` };
+	const known = place.city ? `there is no Gita Press branch in ${place.city}` : 'the reader\'s city is not known';
+	return { branch: HEAD_OFFICE, why: key === 'gorakhpur' ? 'the reader is in Gorakhpur' : `${known}, so the head office is used` };
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);

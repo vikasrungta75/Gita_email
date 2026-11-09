@@ -2,7 +2,7 @@
   "name": "gita-mail",
   "version": "1.0.0",
   "private": true,
-  "description": "remail by Ravity \u2014 AI email intelligence for Wheel King TransHaul",
+  "description": "remail by Ravity — AI email intelligence for Wheel King TransHaul",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -30,6 +30,7 @@
     "bcryptjs": "^2.4.3",
     "classnames": "^2.5.1",
     "date-fns": "^3.6.0",
+    "fflate": "^0.8.3",
     "jose": "^5.9.3",
     "mailparser": "^3.7.1",
     "nodemailer": "^6.9.15",

@@ -525,4 +525,73 @@ create index if not exists customers_profile_at_idx on customers (org_id, profil
 alter table customers add column if not exists enrichment jsonb not null default '{}';
 alter table customers add column if not exists enriched_at timestamptz;
 ` },
+{ id: '011_stock_inventory_purposes', sql: String.raw`
+-- Tally stock summaries uploaded for the head office (HQ) and the branches; every upload is kept for trends
+create table if not exists stock_uploads (
+  id           bigserial primary key,
+  org_id       bigint not null references organisations(id) on delete cascade,
+  scope        text not null check (scope in ('hq','branch')),
+  file_name    text not null default '',
+  period_from  date not null,
+  period_to    date not null,
+  locations    text[] not null default '{}',
+  sheets       jsonb not null default '[]',
+  row_count    int not null default 0,
+  warnings     text[] not null default '{}',
+  uploaded_by  bigint references users(id) on delete set null,
+  uploaded_at  timestamptz not null default now()
+);
+create index if not exists stock_uploads_org_idx on stock_uploads (org_id, scope, period_to desc);
+create table if not exists stock_rows (
+  upload_id    bigint not null references stock_uploads(id) on delete cascade,
+  org_id       bigint not null,
+  location     text not null,
+  godown       text not null default '',
+  godown_kind  text not null,
+  code         text not null,
+  name         text not null default '',
+  language     text not null default '',
+  batch        text not null default '',
+  price        numeric,
+  opening_qty  numeric not null default 0,
+  in_qty       numeric not null default 0,
+  out_qty      numeric not null default 0,
+  closing_qty  numeric not null default 0,
+  out_value    numeric not null default 0,
+  closing_value numeric not null default 0
+);
+create index if not exists stock_rows_upload_idx on stock_rows (upload_id, location);
+create index if not exists stock_rows_code_idx on stock_rows (org_id, code);
+-- one entry per book code: the name and language from Tally, and the Hindi title from the uploaded title list
+create table if not exists book_titles (
+  org_id       bigint not null references organisations(id) on delete cascade,
+  code         text not null,
+  name         text not null default '',
+  language     text not null default '',
+  hindi_title  text,
+  aliases      text[] not null default '{}',
+  updated_at   timestamptz not null default now(),
+  primary key (org_id, code)
+);
+-- books readers asked about by email, with whether they were in stock then (unmet demand, back-in-stock outreach)
+create table if not exists book_requests (
+  org_id          bigint not null references organisations(id) on delete cascade,
+  conversation_id bigint not null references conversations(id) on delete cascade,
+  customer_id     bigint references customers(id) on delete set null,
+  code            text not null,
+  nearest         text,
+  hq_qty          numeric,
+  near_qty        numeric,
+  requested_at    timestamptz not null default now(),
+  primary key (conversation_id, code)
+);
+create index if not exists book_requests_org_idx on book_requests (org_id, code);
+-- why each reader contacted Gita Press (several per thread); the customer record collects all of them
+alter table conversations add column if not exists purposes text[] not null default '{}';
+alter table conversations add column if not exists purposes_locked boolean not null default false;
+alter table conversations add column if not exists purposes_at timestamptz;
+create index if not exists conversations_purposes_idx on conversations using gin (purposes);
+alter table customers add column if not exists purposes text[] not null default '{}';
+create index if not exists customers_purposes_idx on customers using gin (purposes);
+` },
 ];

@@ -124,16 +124,16 @@ export default function Settings() {
 							{form.replyFooter !== false && (
 								<div className="field">
 									<label>Address used in the reply</label>
-									<span className="hint">The branch in the reader's city is used when its address is filled in below; otherwise the head office: {s.data?.headOffice?.address}.</span>
+									<span className="hint">Filled in from the official Gita Press branch list; correct any field here. The branch in the reader's city is used, otherwise the head office: {s.data?.headOffice?.address}. The same addresses are given when a reader asks for one.</span>
 									<div className="table-wrap mt-8">
 										<table className="table">
-											<thead><tr><th>Branch</th><th>Address</th><th>Phone</th><th>Email</th></tr></thead>
+											<thead><tr><th>Branch</th><th>Address</th><th>Address in Hindi</th><th>Phone</th><th>Email</th></tr></thead>
 											<tbody>
 												{(form.branches || []).map((b: any, i: number) => (
 													<tr key={b.city}>
 														<td className="nowrap"><b>{b.city}</b><div className="xs faint">{b.state}</div></td>
-														{(['address', 'phone', 'email'] as const).map((k) => (
-															<td key={k} style={{ minWidth: k === 'address' ? 320 : 150 }}>
+														{(['address', 'address_hi', 'phone', 'email'] as const).map((k) => (
+															<td key={k} style={{ minWidth: k === 'address' || k === 'address_hi' ? 300 : 150 }}>
 																<input className="input sm" style={{ width: '100%' }} disabled={!admin} value={b[k] || ''} placeholder={k === 'address' ? 'Full address with PIN code' : ''}
 																	onChange={(e) => setForm({ ...form, branches: form.branches.map((x: any, j: number) => (j === i ? { ...x, [k]: e.target.value } : x)) })} />
 															</td>
