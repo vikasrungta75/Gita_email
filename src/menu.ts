@@ -53,11 +53,7 @@ export const menu: { section: string; items: MenuItem[] }[] = [
 		section: 'Admin',
 		items: [
 			{ id: 'customerdb', text: 'Customer database', path: '/admin/customers', icon: MdContacts, minRole: 'analyst' },
-			{ id: 'processing', text: 'Processing status', path: '/admin/processing', icon: MdSync, minRole: 'analyst' },
-			{ id: 'mailboxes', text: 'Mailboxes', path: '/admin/mailboxes', icon: MdInbox, minRole: 'analyst' },
-			{ id: 'users', text: 'Users and access', path: '/admin/users', icon: MdGroup, minRole: 'manager' },
-			{ id: 'settings', text: 'Settings', path: '/admin/settings', icon: MdSettings, minRole: 'manager' },
-			{ id: 'audit', text: 'Audit log', path: '/admin/audit', icon: MdHistory, minRole: 'admin' },
+			{ id: 'settings', text: 'Settings', path: '/admin/settings', icon: MdSettings, minRole: 'analyst', also: ['/admin/mailboxes', '/admin/users', '/admin/processing', '/admin/audit', '/admin/addresses'] },
 			{ id: 'help', text: 'Help and templates', path: '/help', icon: MdHelpOutline },
 		],
 	},

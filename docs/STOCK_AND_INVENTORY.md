@@ -27,6 +27,7 @@ The Excel files from Tally are used as they are; do not convert them to CSV.
 * **Wrong slot.** A file put in the wrong slot is refused with a message.
 * **Negative stock.** A negative closing stock in Tally counts as zero. The upload lists how many rows had one.
 * **History.** To load 12 months of history, pick all the monthly files at once in each slot: one HQ file and one branch file per month.
+* **Nothing is lost.** The original Excel file of every upload is stored and can be downloaded again. **Remove** hides an upload from the figures and **Restore** brings it back. An upload replaced by a newer one for the same period is kept too. Only an admin can erase a removed upload for good.
 
 ### Hindi book titles (optional)
 
@@ -51,7 +52,13 @@ For every email waiting on an answer, Gita Mail finds the books the reader names
 * If they name a place, the draft gives that branch plus the head office.
 * If they name no place, it gives the full list.
 
-The addresses come from the official Gita Press branch list (Hindi version) and are written in English and Hindi. Only `@gitapress.org` emails are given to readers; branch Gmail addresses stay staff-only. Any field can be corrected in **Settings → Reply drafts**, which now has a Hindi address column. The same list is used for the address under each reply.
+The addresses come from the official Gita Press branch list and are kept in **Settings → Addresses**:
+
+* **Hindi first.** Each location shows its Hindi address (the official one) with the English beside it. Both can be edited, with the PIN code, phone numbers and emails.
+* **English kept in step.** If the Hindi address is changed and the English is not, the English is flagged for checking. Until someone confirms it, replies follow the Hindi.
+* **Corrections are saved separately.** A corrected field is marked "corrected", and **Official** puts a location back to the official list.
+* **Emails.** Only `@gitapress.org` emails are given to readers; branch Gmail addresses are staff-only.
+* **Used everywhere.** The same list is used when a reader asks for an address and under every reply, which shows the English and Hindi address.
 
 Without an AI key, the rules engine adds the same stock lines and addresses to its draft as plain text.
 
@@ -88,11 +95,11 @@ How reasons are set:
 * **Older threads.** These are filled in by the rules engine in the background, at no AI cost.
 * **Corrections.** Staff can change the reasons on the conversation page (**Details → Reasons for contacting → Change**). A reason set by staff is never overwritten.
 
-In **Admin → Customer database** you can filter by:
+In **Admin → Customer database** click any column heading (Name, Type, Place, Country, Language, Reasons, Threads, Last contact) to sort; click again to reverse. You can filter by:
 
 * **Contacted for** (any or all of several reasons)
 * **Never contacted for**
-* city, India or abroad, language, type and the other filters already there.
+* city, country, language, type and the other filters already there.
 
 Download the filtered list as **Excel** or **CSV**; both include the reasons. Each customer's record also suggests books and offers for upsell and cross-sell.
 

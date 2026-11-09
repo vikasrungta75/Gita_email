@@ -219,11 +219,12 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	await importStock(orgId, null, 'branch', 'br-sep.xlsx', brFile('1-Sep-26 to 30-Sep-26', 2));
 	const again = await importStock(orgId, null, 'branch', 'br-oct.xlsx', brFile('1-Oct-26 to 31-Oct-26'));
 	assert.equal(again.replaced, 1, 'same period uploaded again replaces the earlier upload');
-	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31'`)).n, 1, 'the replaced upload is gone');
+	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31' and deleted_at is null`)).n, 1, 'the replaced upload is no longer used');
+	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31' and deleted_reason='replaced'`)).n, 1, '...but it is kept');
 	// a branch file split in two for the same period: the second part does not remove the first
 	const part = writeXlsx([{ ...tally('Gita Press - Patna', '1-Oct-26 to 31-Oct-26', [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Patna Branch Location', 450, 9, 0, 1, 8]]), name: 'PATNA' }]);
 	assert.equal((await importStock(orgId, null, 'branch', 'patna.xlsx', part)).replaced, 0);
-	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31'`)).n, 2, 'both parts kept');
+	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31' and deleted_at is null`)).n, 2, 'both parts kept');
 	const cur = await currentStock(orgId);
 	const g6 = cur.books.get('6')!;
 	assert.equal(g6.locs.get('gorakhpur')!.qty, 4750, 'Gorakhpur = Main + Retail, semi-finished excluded');
@@ -286,6 +287,33 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	assert.ok(st.rows.find((x: any) => x.code === '1638')?.status === 'no_sales');
 	assert.ok((await inventory.crossSell(orgId)).segments.length > 3);
 	assert.ok(await inventory.customerSuggestions(orgId, kc.customer_id));
+	// uploads are never lost: removing hides, restoring brings back, the original file can be downloaded
+	const { deleteUpload, restoreUpload, uploadFile } = await import('../server/stock/stock');
+	const sep = await one<any>(`select id from stock_uploads where scope='hq' and period_to='2026-09-30'`);
+	assert.ok((await uploadFile(orgId, sep.id))?.bytes?.length > 100, 'original file stored');
+	await deleteUpload(orgId, sep.id, null);
+	assert.deepEqual((await inventory.overview(orgId)).uploads.n, 4, 'removed upload left out of the figures');
+	await assert.rejects(deleteUpload(orgId, kc.id, null, false), /not found/);
+	await restoreUpload(orgId, sep.id);
+	assert.equal((await inventory.overview(orgId)).uploads.n, 5);
+	await assert.rejects(deleteUpload(orgId, sep.id, null, true), /Remove it first/, 'erasing needs a removed upload');
+	// addresses: the Hindi list with corrections from Settings; corrections reach replies
+	const { resolveDirectory } = await import('../server/directory');
+	const dir = resolveDirectory({ directory: [{ key: 'mumbai', address_hi: 'दूकान नं. 7, बे व्यू टॉवर, चीरा बाजार, मुम्बई', needs_english_check: true }] });
+	const mum = dir.find((d) => d.key === 'mumbai')!;
+	assert.equal(mum.address_hi, 'दूकान नं. 7, बे व्यू टॉवर, चीरा बाजार, मुम्बई');
+	assert.ok(mum.needs_english_check && mum.edited!.includes('address_hi'));
+	assert.equal(resolveDirectory({ branches: [{ city: 'Delhi', address: '2610, Nai Sarak, Delhi 110006' }] }).find((d) => d.key === 'delhi')!.address, '2610, Nai Sarak, Delhi', 'older saved corrections still apply');
+	await q(`update organisations set settings = settings || jsonb_build_object('directory', $2::jsonb) where id=$1`, [orgId, JSON.stringify([{ key: 'mumbai', address_hi: 'दूकान नं. 7, बे व्यू टॉवर, चीरा बाजार, मुम्बई', needs_english_check: true }])]);
+	(await import('../server/settings')).invalidateOrg(orgId);
+	const addr2 = await stockContext(orgId, 'What is the address of your Mumbai branch?', {});
+	assert.match(addr2.prompt, /दूकान नं\. 7/, 'corrected Hindi address used in replies');
+	assert.match(addr2.prompt, /follow the Hindi/);
+	// customer database: country and sorting by any column
+	const byCountry = await listCustomerDb(orgId, new URLSearchParams({ sort: 'name', dir: 'desc' }));
+	const names = byCountry.rows.map((r: any) => r.name.toLowerCase());
+	assert.deepEqual(names, [...names].sort().reverse(), 'sorted by name, descending');
+	assert.ok(Array.isArray(byCountry.totals.countries));
 }
 console.log('All pipeline tests passed');
 await getPool().end();

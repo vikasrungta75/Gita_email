@@ -33,9 +33,9 @@ import { normaliseSubcategory, subgroupOf, taxonomyTree } from './ai/taxonomy';
 import { dismissDraft, fillDraft, getDraft, getDraftForConversation, listDrafts, saveDraft, sendDraft } from './drafts';
 import { BUSINESS_CATEGORIES, BUSINESS_LABELS, CATEGORIES, CATEGORY_LABELS, PROPOSAL_STAGES, type BusinessCategory } from './ai/types';
 import type { MailboxRow } from './connectors/types';
-import { currentStock, deleteUpload, importStock, importTitles, inventorySettings, listUploads, saveInventorySettings, stockForConversation, titlesSummary, titlesTemplate } from './stock/stock';
+import { currentStock, deleteUpload, importStock, restoreUpload, uploadFile, importTitles, inventorySettings, listUploads, saveInventorySettings, stockForConversation, titlesSummary, titlesTemplate } from './stock/stock';
 import { crossSell, customerSuggestions, demand as inventoryDemand, overview as inventoryOverview, rangeGaps, replenishment, slowMovers, stockStatus, topSellers } from './stock/inventory';
-import { DIRECTORY, HQ_CONTACT, POST_NOTE, POST_NOTE_HI } from './directory';
+import { BY_KEY, DIRECTORY, HQ_CONTACT, POST_NOTE, POST_NOTE_HI, resolveDirectory, type DirectoryOverride } from './directory';
 import { PURPOSES, PURPOSE_HINTS, PURPOSE_LABELS, normalisePurposes } from './ai/purposes';
 import { writeXlsx } from './xlsx';
 
@@ -1180,7 +1180,7 @@ r.del('/api/settings/google-service-account', async (ctx) => {
 r.get('/api/settings', async (ctx) => {
 	const org = await getOrg(ctx.user!.orgId, true);
 	const { googleServiceAccountEnc: _secret, ...settings } = org.settings as any;
-	return { name: org.name, internalDomains: org.internalDomains, settings: { replyFooter: true, ...settings, branches: branchList(settings.branches) }, headOffice: HEAD_OFFICE };
+	return { name: org.name, internalDomains: org.internalDomains, settings: { replyFooter: true, ...settings, branches: branchList(settings) }, headOffice: HEAD_OFFICE };
 });
 
 r.patch('/api/settings', async (ctx) => {
@@ -1387,10 +1387,24 @@ r.post('/api/stock/upload', async (ctx) => {
 	return res;
 });
 r.del('/api/stock/uploads/:id', async (ctx) => {
-	requireRole(ctx.user, 'manager');
-	const res = await deleteUpload(ctx.user!.orgId, Number(ctx.params.id));
-	await audit(ctx, 'stock.upload_deleted', 'stock_upload', Number(ctx.params.id));
+	const permanent = ctx.query.get('permanent') === '1';
+	requireRole(ctx.user, permanent ? 'admin' : 'manager');
+	const res = await deleteUpload(ctx.user!.orgId, Number(ctx.params.id), ctx.user!.id, permanent);
+	await audit(ctx, permanent ? 'stock.upload_erased' : 'stock.upload_removed', 'stock_upload', Number(ctx.params.id));
 	return res;
+});
+r.post('/api/stock/uploads/:id/restore', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const res = await restoreUpload(ctx.user!.orgId, Number(ctx.params.id));
+	await audit(ctx, 'stock.upload_restored', 'stock_upload', Number(ctx.params.id));
+	return res;
+});
+r.get('/api/stock/uploads/:id/file', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	const f = await uploadFile(ctx.user!.orgId, Number(ctx.params.id));
+	if (!f) throw new HttpError(404, 'The original file is not stored for this upload');
+	await audit(ctx, 'export.stock_file', 'stock_upload', Number(ctx.params.id));
+	return new Response(new Uint8Array(f.bytes), { headers: { 'content-type': f.content_type, 'content-disposition': `attachment; filename="${String(f.file_name || 'stock.xlsx').replace(/["\r\n]/g, '')}"` } });
 });
 r.post('/api/stock/titles', async (ctx) => {
 	requireRole(ctx.user, 'manager');
@@ -1465,6 +1479,60 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 });
 r.get('/api/purposes', async () => ({ purposes: PURPOSES.map((k) => ({ key: k, label: PURPOSE_LABELS[k], hint: PURPOSE_HINTS[k] })) }));
 
+
+// ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──
+r.get('/api/settings/directory', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	const org = await getOrg(ctx.user!.orgId, true);
+	return { entries: resolveDirectory(org.settings), official: DIRECTORY, postNote: POST_NOTE, postNoteHi: POST_NOTE_HI };
+});
+r.put('/api/settings/directory', async (ctx) => {
+	requireRole(ctx.user, 'manager');
+	const org = await getOrg(ctx.user!.orgId, true);
+	const before = new Map(resolveDirectory(org.settings).map((d) => [d.key, d]));
+	const prev = new Map<string, DirectoryOverride>(((org.settings as any).directory || []).map((o: DirectoryOverride) => [o.key, o]));
+	const clean = (v: unknown, n = 300) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+	const changed: string[] = [];
+	const sent = new Map<string, any>(((Array.isArray(ctx.body?.entries) ? ctx.body.entries : []) as any[]).filter((e) => BY_KEY.has(String(e?.key))).map((e) => [String(e.key), e]));
+	// every entry is written, so corrections saved the older way (per city) are carried over
+	for (const off of DIRECTORY) {
+		const e = sent.get(off.key) || {};
+		if (e.reset) { prev.delete(off.key); changed.push(off.key); continue; }
+		const cur = before.get(off.key)!;
+		const next: any = {
+			address: clean(e.address ?? cur.address), address_hi: clean(e.address_hi ?? cur.address_hi), pin: clean(e.pin ?? cur.pin, 12),
+			phones: (Array.isArray(e.phones) ? e.phones : String(e.phones ?? cur.phones.join(', ')).split(/\s*[,;\n]\s*/)).map((x: unknown) => clean(x, 40)).filter(Boolean).slice(0, 8),
+			email: clean(e.email ?? cur.email ?? '', 120), staff_email: clean(e.staff_email ?? cur.staff_email ?? '', 120),
+		};
+		if (!next.address_hi || !next.address) throw new HttpError(400, `${off.city}: both the Hindi and the English address are needed`);
+		if (next.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email)) throw new HttpError(400, `${off.city}: the email address is not valid`);
+		// only what differs from the official list is stored
+		const o: DirectoryOverride = { key: off.key };
+		if (next.address !== off.address) o.address = next.address;
+		if (next.address_hi !== off.address_hi) o.address_hi = next.address_hi;
+		if (next.pin !== off.pin) o.pin = next.pin;
+		if (next.phones.join('|') !== off.phones.join('|')) o.phones = next.phones;
+		if (next.email !== (off.email || '')) o.email = next.email;
+		if (next.staff_email !== (off.staff_email || '')) o.staff_email = next.staff_email;
+		// the Hindi address is the official one: when it changes and the English does not, flag the English for checking
+		const hiChanged = next.address_hi !== cur.address_hi;
+		const enChanged = next.address !== cur.address;
+		const flag = e.englishChecked ? false : enChanged ? false : hiChanged ? true : !!cur.needs_english_check;
+		if (flag) o.needs_english_check = true;
+		const key = (x?: DirectoryOverride) => JSON.stringify(x ? { ...x, updated_at: undefined } : { key: off.key });
+		const old = prev.get(off.key);
+		if (key(o) === key(old)) continue;
+		if (Object.keys(o).length === 1) prev.delete(off.key);
+		else prev.set(off.key, { ...o, updated_at: new Date().toISOString() });
+		changed.push(off.key);
+	}
+	const directory = [...prev.values()];
+	await q(`update organisations set settings = (coalesce(settings,'{}'::jsonb) - 'branches') || jsonb_build_object('directory', $2::jsonb) where id=$1`, [ctx.user!.orgId, JSON.stringify(directory)]);
+	invalidateOrg(ctx.user!.orgId);
+	await audit(ctx, 'settings.addresses_updated', 'organisation', ctx.user!.orgId, { changed });
+	return { entries: resolveDirectory((await getOrg(ctx.user!.orgId, true)).settings), changed };
+});
+
 // ── Customer database (Admin) ───────────────────────────────────────────────
 r.get('/api/customer-db', async (ctx) => {
 	requireRole(ctx.user, 'analyst');
@@ -1473,7 +1541,7 @@ r.get('/api/customer-db', async (ctx) => {
 	if (format !== 'csv' && format !== 'xlsx') return res;
 	const cols = ['name', 'type', 'organisation', 'emails', 'phones', 'address', 'city', 'state', 'pin', 'country', 'language', 'purposes', 'order_refs', 'subscriber_numbers', 'books', 'gstin', 'threads', 'waiting', 'first_contact', 'last_contact_at', 'notes'];
 	const heads = ['Name', 'Type', 'Organisation', 'Emails', 'Phones', 'Address', 'City', 'State', 'PIN', 'Country', 'Language', 'Reasons for contacting', 'Order numbers', 'Kalyan subscriber numbers', 'Books asked about', 'GSTIN', 'Threads', 'Waiting', 'First contact', 'Last contact', 'Notes'];
-	const val = (r: any, c: string) => (c === 'purposes' ? (r.purposes || []).map((x: string) => (PURPOSE_LABELS as any)[x] || x) : c in r.p ? (r.p as any)[c] : r[c]);
+	const val = (r: any, c: string) => (c === 'purposes' ? (r.purposes || []).map((x: string) => (PURPOSE_LABELS as any)[x] || x) : c === 'country' ? r.country : c in r.p ? (r.p as any)[c] : r[c]);
 	const flat = (v: any) => (Array.isArray(v) ? v.join('; ') : v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : v);
 	await audit(ctx, 'export.customer_db', 'customer', null, { rows: res.rows.length, format });
 	const stamp = new Date().toISOString().slice(0, 10);

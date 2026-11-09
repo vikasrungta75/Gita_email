@@ -2331,3 +2331,35 @@ table.table tbody tr:nth-child(even) td {
 		&.down { margin-top: 4px; margin-bottom: 6px; }
 	}
 }
+
+/* pages shown inside a Settings tab: their heading becomes a section heading */
+.settings-tab > .page-head h1,
+.settings-tab .page-head:first-child h1 {
+	font-size: 19px;
+}
+
+/* sortable table headings */
+th.sortable .th-sort {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font: inherit;
+	color: inherit;
+	.arrow {
+		font-size: 10px;
+		opacity: 0.35;
+	}
+}
+th.sortable.on .th-sort {
+	color: var(--text, #0f172a);
+	.arrow {
+		opacity: 0.9;
+	}
+}
+th.sortable .th-sort:focus-visible {
+	outline: 2px solid var(--pink, #4f46e5);
+	outline-offset: 2px;
+	border-radius: 4px;
+}

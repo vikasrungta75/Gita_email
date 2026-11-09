@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MdAutoAwesome, MdDownload, MdOpenInNew, MdSearch } from 'react-icons/md';
@@ -23,7 +23,7 @@ const list = (v: any) => (Array.isArray(v) ? v.join(', ') : v || '');
 export default function CustomerDb() {
 	const [sp] = useSearchParams();
 	const list0 = (k: string) => (sp.get(k) || '').split(',').filter(Boolean);
-	const [f, setF] = useState({ q: '', type: '', language: '', has: '', sort: 'recent', city: '', country: '', purposes: list0('purposes'), purposeMode: sp.get('purposeMode') || 'any', not: list0('not') });
+	const [f, setF] = useState({ q: '', type: '', language: '', has: '', sort: sp.get('sort') || 'recent', dir: '', city: '', country: sp.get('country') || '', purposes: list0('purposes'), purposeMode: sp.get('purposeMode') || 'any', not: list0('not') });
 	const [city, setCity] = useState('');
 	useEffect(() => { const t = setTimeout(() => setF((x) => ({ ...x, city })), 350); return () => clearTimeout(t); }, [city]);
 	const [search, setSearch] = useState('');
@@ -74,7 +74,8 @@ export default function CustomerDb() {
 				</select>
 				<input className={`input sm ${f.city ? 'on' : ''}`} style={{ width: 130 }} placeholder="City" value={city} onChange={(e) => setCity(e.target.value)} aria-label="City" />
 				<select className={`input sm drop ${f.country ? 'on' : ''}`} value={f.country} onChange={(e) => setF({ ...f, country: e.target.value })} aria-label="Country">
-					<option value="">India and abroad</option><option value="india">India</option><option value="abroad">Abroad</option>
+					<option value="">Any country</option>
+					{(t.countries || []).map((x: any) => <option key={x.k || '-'} value={x.k || '-'}>{x.k || 'Not known'} ({n(x.n)})</option>)}
 				</select>
 				<select className={`input sm drop ${f.has ? 'on' : ''}`} value={f.has} onChange={(e) => setF({ ...f, has: e.target.value })} aria-label="Has">
 					<option value="">Any details</option>
@@ -87,17 +88,18 @@ export default function CustomerDb() {
 					options={PURPOSE_KEYS.map((k) => ({ v: k, l: purposeLabel(k), extra: purposeCount(k) ? <span className="xs faint">{n(purposeCount(k))}</span> : undefined }))} />
 				{f.purposes.length > 1 && <Segmented value={f.purposeMode} onChange={(v) => setF({ ...f, purposeMode: v })} options={[{ v: 'any', l: 'Any of these' }, { v: 'all', l: 'All of these' }]} />}
 				<MultiSelect label="Never contacted for" keepLabel searchable value={f.not} onChange={(v) => setF({ ...f, not: v })} options={PURPOSE_KEYS.map((k) => ({ v: k, l: purposeLabel(k) }))} />
-				{filtered ? <button className="btn ghost sm" onClick={() => { setSearch(''); setCity(''); setF({ q: '', type: '', language: '', has: '', sort: f.sort, city: '', country: '', purposes: [], purposeMode: 'any', not: [] }); }}>Clear filters</button> : null}
-				<select className="input sm drop" value={f.sort} onChange={(e) => setF({ ...f, sort: e.target.value })} aria-label="Sort">
-					<option value="recent">Latest contact</option><option value="threads">Most threads</option><option value="name">Name</option>
-				</select>
+				{filtered ? <button className="btn ghost sm" onClick={() => { setSearch(''); setCity(''); setF({ q: '', type: '', language: '', has: '', sort: f.sort, dir: f.dir, city: '', country: '', purposes: [], purposeMode: 'any', not: [] }); }}>Clear filters</button> : null}
 			</div>
 			<Card flush>
 				{isLoading ? <Loader text="Loading customers" /> : !data?.rows?.length ? <Empty text="No customers match." /> : (
 					<>
 						<div className="table-wrap">
 							<table className="table">
-								<thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Place</th><th>Language</th><th>Reasons for contacting</th><th>Orders and subscriptions</th><th className="num">Threads</th><th>Last contact</th></tr></thead>
+								<thead><tr>
+									<Th k="name" f={f} setF={setF}>Name</Th><Th k="type" f={f} setF={setF}>Type</Th><th>Phone</th><Th k="place" f={f} setF={setF}>Place</Th>
+									<Th k="country" f={f} setF={setF}>Country</Th><Th k="language" f={f} setF={setF}>Language</Th><Th k="reasons" f={f} setF={setF}>Reasons for contacting</Th>
+									<th>Orders and subscriptions</th><Th k="threads" f={f} setF={setF} num>Threads</Th><Th k="recent" f={f} setF={setF}>Last contact</Th>
+								</tr></thead>
 								<tbody>
 									{data.rows.map((r: any) => (
 										<tr key={r.id} className="click" onClick={() => setOpen(r)}>
@@ -105,6 +107,7 @@ export default function CustomerDb() {
 											<td className="small nowrap">{TYPES[r.p.type || r.kind] || r.p.type || r.kind}</td>
 											<td className="small mono nowrap">{r.p.phones?.[0] || <span className="faint">–</span>}</td>
 											<td className="small" style={{ maxWidth: 200 }}>{[r.p.city, r.p.state || r.enrichment?.region?.pin_state, r.p.pin].filter(Boolean).join(', ') || <span className="faint">–</span>}{r.enrichment?.possible_duplicates?.length ? <div className="xs" style={{ color: 'var(--amber)' }}>Possible duplicate</div> : null}</td>
+											<td className="small nowrap">{r.country || <span className="faint">–</span>}</td>
 											<td className="small">{r.p.language || <span className="faint">–</span>}</td>
 											<td className="xs" style={{ maxWidth: 230 }}>{(r.purposes || []).length ? <div className="row wrap gap-4">{r.purposes.slice(0, 3).map((x: string) => <span key={x} className="chip" title={purposeLabel(x)}>{shortPurpose(x)}</span>)}{r.purposes.length > 3 && <span className="faint">+{r.purposes.length - 3}</span>}</div> : <span className="faint">–</span>}</td>
 											<td className="xs" style={{ maxWidth: 220 }}>
@@ -252,5 +255,18 @@ function Suggestions({ id }: { id: number }) {
 			)}
 			{!data.hasStock && <div className="xs faint">Upload stock in Inventory to get book suggestions.</div>}
 		</div>
+	);
+}
+
+const DEFAULT_DIR: Record<string, string> = { recent: 'desc', threads: 'desc', reasons: 'desc' };
+/** A column heading that sorts the list; a second click reverses the order. */
+function Th({ k, f, setF, num, children }: { k: string; f: any; setF: (v: any) => void; num?: boolean; children: ReactNode }) {
+	const on = f.sort === k;
+	const dir = on ? f.dir || DEFAULT_DIR[k] || 'asc' : '';
+	const next = () => setF({ ...f, sort: k, dir: on ? (dir === 'asc' ? 'desc' : 'asc') : DEFAULT_DIR[k] || 'asc' });
+	return (
+		<th className={`${num ? 'num ' : ''}sortable${on ? ' on' : ''}`} aria-sort={on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+			<button type="button" className="th-sort" onClick={next}>{children}<span className="arrow">{on ? (dir === 'asc' ? '▲' : '▼') : '↕'}</span></button>
+		</th>
 	);
 }

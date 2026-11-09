@@ -594,4 +594,16 @@ create index if not exists conversations_purposes_idx on conversations using gin
 alter table customers add column if not exists purposes text[] not null default '{}';
 create index if not exists customers_purposes_idx on customers using gin (purposes);
 ` },
+{ id: '012_stock_keep_files_soft_delete', sql: String.raw`
+-- uploads are never lost: a removed or fully replaced upload is hidden (deleted_at), its rows and the original file stay
+alter table stock_uploads add column if not exists deleted_at timestamptz;
+alter table stock_uploads add column if not exists deleted_by bigint references users(id) on delete set null;
+alter table stock_uploads add column if not exists deleted_reason text;
+alter table stock_uploads add column if not exists replaced_locations text[] not null default '{}';
+create table if not exists stock_files (
+  upload_id    bigint primary key references stock_uploads(id) on delete cascade,
+  bytes        bytea not null,
+  content_type text not null default 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+);
+` },
 ];

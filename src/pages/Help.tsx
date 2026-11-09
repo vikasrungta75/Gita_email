@@ -77,7 +77,7 @@ function HowItWorks({ go }: { go: (s: Section) => void }) {
 				<ul>
 					<li>Edit the <a onClick={() => go('templates')} href="#templates">reply templates</a> so they say exactly what Gita Press would say. Every new draft follows them.</li>
 					<li>Upload the book catalogue, FAQs and policies under <a onClick={() => go('reference')} href="#reference">Reference data</a>. Matching entries are given to Claude for each email, so prices, stock and rules are filled in instead of left yellow.</li>
-					<li>Add standing facts (dispatch times, fees, refund timelines) and the signature in Settings → Reply drafts.</li>
+					<li>Add standing facts (dispatch times, fees, refund timelines) and the signature in Settings → Reply drafts. Branch addresses are in Settings → Addresses.</li>
 					<li>If a thread is in the wrong group or subgroup, correct it on the thread. Corrections are kept and are not overwritten by later analysis.</li>
 				</ul>
 				<h3>Template fields</h3>

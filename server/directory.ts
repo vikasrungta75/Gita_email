@@ -22,7 +22,26 @@ export interface DirectoryEntry {
 	/** has no stock sheet (Kathmandu): address only */
 	no_stock?: boolean;
 	head_office?: boolean;
+	/** the Hindi address was changed after the English one; the English should be checked against it */
+	needs_english_check?: boolean;
+	/** a field here differs from the official list because staff corrected it */
+	edited?: string[];
+	updated_at?: string;
 }
+
+/** A correction saved in Settings → Addresses (only the fields that differ from the official list). */
+export interface DirectoryOverride {
+	key: string;
+	address?: string;
+	address_hi?: string;
+	pin?: string;
+	phones?: string[];
+	email?: string;
+	staff_email?: string;
+	needs_english_check?: boolean;
+	updated_at?: string;
+}
+export const EDITABLE = ['address', 'address_hi', 'pin', 'phones', 'email', 'staff_email'] as const;
 
 export const HQ_KEY = 'gorakhpur';
 export const POST_NOTE = 'Books can be sent by post and abroad only from Gorakhpur.';
@@ -55,6 +74,43 @@ export const DIRECTORY: DirectoryEntry[] = [
 ];
 
 export const BY_KEY = new Map(DIRECTORY.map((d) => [d.key, d]));
+
+/**
+ * The directory with corrections from Settings applied. The Hindi address is the official one; the English is kept
+ * in step with it. Older saved settings (settings.branches: address, phone, email per city) still apply.
+ */
+export function resolveDirectory(settings?: any): DirectoryEntry[] {
+	const over = new Map<string, DirectoryOverride>(((settings?.directory || []) as DirectoryOverride[]).filter((o) => o?.key).map((o) => [o.key, o]));
+	const legacy = new Map<string, any>(((settings?.directory ? [] : settings?.branches || []) as any[]).filter((b) => b?.city).map((b) => [String(b.city).toLowerCase(), b]));
+	return DIRECTORY.map((d) => {
+		const e: DirectoryEntry = { ...d, phones: [...d.phones], edited: [] };
+		const o = over.get(d.key);
+		if (o) {
+			for (const k of EDITABLE) {
+				const v = (o as any)[k];
+				if (v === undefined || v === null) continue;
+				(e as any)[k] = k === 'phones' ? [...v] : v;
+				e.edited!.push(k);
+			}
+			e.needs_english_check = !!o.needs_english_check;
+			e.updated_at = o.updated_at;
+		}
+		const l = legacy.get(d.city.toLowerCase());
+		if (l) {
+			const addr = String(l.address || '').trim();
+			const pin = addr.match(/\b(\d{5,6})\s*$/)?.[1];
+			if (addr && addr !== `${d.address} ${d.pin}`) { e.address = pin ? addr.replace(/\s*\d{5,6}\s*$/, '') : addr; if (pin) e.pin = pin; e.edited!.push('address'); }
+			const ahi = String(l.address_hi || '').trim();
+			if (ahi && ahi !== `${d.address_hi} ${d.pin}`) { e.address_hi = ahi.replace(/\s*\d{5,6}\s*$/, ''); e.edited!.push('address_hi'); }
+			const ph = String(l.phone || '').trim();
+			if (ph && ph !== d.phones.join(', ')) { e.phones = ph.split(/\s*[,;]\s*/).filter(Boolean); e.edited!.push('phones'); }
+			if (String(l.email || '').trim() && l.email !== (d.email || '')) { e.email = String(l.email).trim(); e.edited!.push('email'); }
+		}
+		// a reader is only given an official @gitapress.org address
+		if (e.email && !/@gitapress\.org$/i.test(e.email)) { e.staff_email = e.staff_email || e.email; e.email = undefined; }
+		return e;
+	});
+}
 export const locationLabel = (key: string) => (BY_KEY.get(key)?.city || key.replace(/^./, (c) => c.toUpperCase()));
 
 /** Other names readers and Tally use for each place. */
@@ -175,6 +231,7 @@ export function isAbroad(place: Place): boolean {
 /** The reader is asking for an address, shop or phone number (not giving their own address). */
 export const ADDRESS_INTENT = /\b(your|gita ?press'?s?|the)\s+(address(es)?|shops?|branch(es)?|stores?|outlets?|showrooms?|book ?shops?|dukan)\b|\baddress(es)? (of|for)\b|\bshare (the |your )?address(es)?\b|\b(branch(es)?|shops?|dukan|outlets?|showrooms?|book ?stores?|book ?shops?)\s+(in|at|near)\b|\bnearest (branch|shop|store|outlet|dukan)\b|\bwhere (can|do|could) (i|we) (buy|get|purchase|find)\b|\b(contact|phone|mobile|telephone) (no\.?|number|numbers|details) (of|for)\b|(का|के|की) पता|पता (बताइए|बताइये|बताएं|बताएँ|बतायें|दीजिए|दीजिये|दें|भेजें|भेजिए|क्या है)|शाखा|शाखाओं|दुकान|दूकान|कहाँ (मिलेगी|मिलेगा|मिलती|मिलते|से (खरीद|मिल|ले))|कहां (मिलेगी|मिलेगा|मिलती|से)|संपर्क (नंबर|सूत्र)|फोन नंबर/i;
 
+/** One line for a reply. */
 export function entryText(d: DirectoryEntry, hindi = false, withPublicEmail = true): string {
 	const name = hindi ? `${d.city_hi}${d.head_office ? ' (मुख्य कार्यालय)' : ''}` : `${d.city}${d.head_office ? ' (head office)' : ''}`;
 	const addr = hindi ? d.address_hi : d.address;

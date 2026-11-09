@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { MdDelete, MdDownload, MdSearch, MdUploadFile } from 'react-icons/md';
+import { MdDelete, MdDownload, MdRestore, MdSearch, MdUploadFile } from 'react-icons/md';
 import { api, getToken, qs } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -500,7 +500,16 @@ function Uploads() {
 	const { data, isLoading } = useLocations();
 	const titlesRef = useRef<HTMLInputElement>(null);
 	const [form, setForm] = useState<any>(null);
-	const del = useMutation({ mutationFn: (id: number) => api(`/stock/uploads/${id}`, { method: 'DELETE' }), onSuccess: () => { qc.invalidateQueries(); toast('Upload removed'); }, onError: (e: any) => toast(e.message, 'error') });
+	const del = useMutation({ mutationFn: ({ id, permanent }: { id: number; permanent?: boolean }) => api(`/stock/uploads/${id}${permanent ? '?permanent=1' : ''}`, { method: 'DELETE' }), onSuccess: (_r, v) => { qc.invalidateQueries(); toast(v.permanent ? 'Upload erased' : 'Upload removed. It can be restored below.'); }, onError: (e: any) => toast(e.message, 'error') });
+	const restore = useMutation({ mutationFn: (id: number) => api(`/stock/uploads/${id}/restore`, { body: {} }), onSuccess: () => { qc.invalidateQueries(); toast('Upload restored'); }, onError: (e: any) => toast(e.message, 'error') });
+	const fileOf = async (u: any) => {
+		const res = await fetch(`/api/stock/uploads/${u.id}/file`, { headers: { authorization: `Bearer ${getToken()}` } });
+		if (!res.ok) return toast('The original file is not stored for this upload', 'error');
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(await res.blob());
+		a.download = u.file_name || 'stock.xlsx';
+		a.click();
+	};
 	const titles = useMutation({
 		mutationFn: async (f: File) => api('/stock/titles', { body: { fileName: f.name, data: await fileToBase64(f) } }),
 		onSuccess: (r) => { qc.invalidateQueries(); toast(`Hindi titles saved: ${r.updated + r.added} codes${r.skipped ? `, ${r.skipped} rows skipped` : ''}`); if (titlesRef.current) titlesRef.current.value = ''; },
@@ -509,6 +518,8 @@ function Uploads() {
 	const save = useMutation({ mutationFn: () => api('/stock/settings', { method: 'PUT', body: { ...form, nonSalesGodowns: String(form.nonSalesGodowns || '').split('\n').map((x: string) => x.trim()).filter(Boolean) } }), onSuccess: () => { qc.invalidateQueries(); toast('Settings saved'); setForm(null); }, onError: (e: any) => toast(e.message, 'error') });
 	if (isLoading || !data) return <Loader />;
 	const s = data.settings;
+	const active = data.uploads.filter((u: any) => !u.deleted_at);
+	const removed = data.uploads.filter((u: any) => u.deleted_at);
 	const f = form || { coverDays: s.coverDays, leadDays: s.leadDays, branches: s.branches, nonSalesGodowns: (s.nonSalesGodowns || []).join('\n') };
 	const manager = can('manager');
 	const template = async () => {
@@ -558,28 +569,48 @@ function Uploads() {
 					{manager && form && <button className="btn primary mt-8" disabled={save.isPending} onClick={() => save.mutate()}>Save settings</button>}
 				</Card>
 			</div>
-			<Card flush title={`Uploads (${data.uploads.length})`} sub="Every upload is kept for trends. The latest period for each location is its current stock.">
-				{!data.uploads.length ? <Empty text="Nothing uploaded yet." /> : (
-					<div className="table-wrap">
-						<table className="table">
-							<thead><tr><th>Period</th><th>Type</th><th>File</th><th>Locations</th><th className="num">Rows</th><th>Uploaded</th><th /></tr></thead>
-							<tbody>
-								{data.uploads.map((u: any) => (
-									<tr key={u.id}>
-										<td className="nowrap">{fmtDate(u.period_from)} – {fmtDate(u.period_to)}</td>
-										<td>{u.scope === 'hq' ? 'Head office' : 'Branches'}</td>
-										<td className="small">{u.file_name}{u.warnings?.length ? <div className="xs" style={{ color: 'var(--amber)' }} title={u.warnings.join('\n')}>{u.warnings.length} note{u.warnings.length > 1 ? 's' : ''}</div> : null}</td>
-										<td className="xs">{u.locations.length > 3 ? `${u.locations.length} locations` : u.locations.join(', ')}</td>
-										<td className="num">{num(u.row_count)}</td>
-										<td className="small nowrap">{ago(u.uploaded_at)}{u.uploaded_by ? ` · ${u.uploaded_by}` : ''}</td>
-										<td>{manager && <button className="btn ghost icon sm" aria-label="Remove upload" onClick={() => confirm('Remove this upload? Its stock and sales are taken out of the figures.') && del.mutate(u.id)}><MdDelete /></button>}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
-			</Card>
+			<UploadTable title={`Uploads in use (${active.length})`} sub="Every upload is kept for trends. The latest period for each location is its current stock. The original Excel files are stored and can be downloaded."
+				rows={active} actions={(u) => <>
+					{u.has_file && <button className="btn ghost icon sm" title="Download the original file" aria-label="Download the original file" onClick={() => fileOf(u)}><MdDownload /></button>}
+					{manager && <button className="btn ghost icon sm" title="Remove (can be restored)" aria-label="Remove upload" onClick={() => confirm('Remove this upload? Its stock and sales are taken out of the figures. You can restore it later.') && del.mutate({ id: u.id })}><MdDelete /></button>}
+				</>} />
+			{removed.length > 0 && (
+				<details className="mt-16">
+					<summary className="small">Removed and replaced uploads ({removed.length}): kept, not used in the figures</summary>
+					<UploadTable rows={removed} removed actions={(u) => <>
+						{u.has_file && <button className="btn ghost icon sm" title="Download the original file" aria-label="Download the original file" onClick={() => fileOf(u)}><MdDownload /></button>}
+						{manager && u.deleted_reason !== 'replaced' && <button className="btn sm" onClick={() => restore.mutate(u.id)}><MdRestore /> Restore</button>}
+						{can('admin') && <button className="btn ghost icon sm" title="Erase permanently" aria-label="Erase permanently" onClick={() => confirm('Erase this upload and its file permanently? This cannot be undone.') && del.mutate({ id: u.id, permanent: true })}><MdDelete /></button>}
+					</>} />
+				</details>
+			)}
 		</>
+	);
+}
+
+function UploadTable({ title, sub, rows, actions, removed }: { title?: string; sub?: string; rows: any[]; actions: (u: any) => ReactNode; removed?: boolean }) {
+	return (
+		<Card flush title={title} sub={sub} className={removed ? 'mt-8' : ''}>
+			{!rows.length ? <Empty text="Nothing uploaded yet." /> : (
+				<div className="table-wrap">
+					<table className="table">
+						<thead><tr><th>Period</th><th>Type</th><th>File</th><th>Locations</th><th className="num">Rows</th><th>{removed ? 'Removed' : 'Uploaded'}</th><th /></tr></thead>
+						<tbody>
+							{rows.map((u: any) => (
+								<tr key={u.id}>
+									<td className="nowrap">{fmtDate(u.period_from)} – {fmtDate(u.period_to)}</td>
+									<td>{u.scope === 'hq' ? 'Head office' : 'Branches'}</td>
+									<td className="small">{u.file_name}{u.warnings?.length ? <div className="xs" style={{ color: 'var(--amber)' }} title={u.warnings.join('\n')}>{u.warnings.length} note{u.warnings.length > 1 ? 's' : ''}</div> : null}</td>
+									<td className="xs">{u.locations.length > 3 ? `${u.locations.length} locations` : u.locations.join(', ') || '–'}{u.replaced_locations?.length ? <div className="faint">{u.replaced_locations.length} replaced by a newer upload</div> : null}</td>
+									<td className="num">{num(u.row_count)}</td>
+									<td className="small nowrap">{removed ? <>{ago(u.deleted_at)}{u.deleted_by ? ` · ${u.deleted_by}` : ''}<div className="xs faint">{u.deleted_reason === 'replaced' ? 'replaced by a newer upload' : 'removed'}</div></> : <>{ago(u.uploaded_at)}{u.uploaded_by ? ` · ${u.uploaded_by}` : ''}</>}</td>
+									<td className="nowrap"><div className="row gap-4" style={{ justifyContent: 'flex-end' }}>{actions(u)}</div></td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</Card>
 	);
 }
