@@ -4,11 +4,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { MdArrowBack, MdAutoAwesome, MdContentCopy, MdRefresh, MdOpenInNew, MdCheckCircle, MdRadioButtonUnchecked, MdAttachFile, MdAdd } from 'react-icons/md';
 import { downloadIcs } from './MyDay';
 import DraftEditor from '../components/DraftEditor';
+import StockPanel from '../components/StockPanel';
+import { PURPOSE_KEYS, purposeLabel, shortPurpose } from '../lib/purposes';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { useFilterOptions } from '../components/FilterBar';
-import { Card, Empty, Health, Loader, RagBadge, SentimentBadge, StateBadge, StatusBadge, TierBadge, UrgencyBadge } from '../components/ui';
+import { Card, Chips, Empty, Health, Loader, RagBadge, SentimentBadge, StateBadge, StatusBadge, TierBadge, UrgencyBadge } from '../components/ui';
 import { useTaxonomy } from '../lib/taxonomy';
 import { BUSINESS_COLORS, BUSINESS_LABELS, COLORS, STAGE_LABELS, ago, bizLabel, catLabel, fmtDate, fmtDateTime, minutes, hoursSince } from '../lib/format';
 
@@ -21,6 +23,7 @@ export default function ConversationDetail() {
 	const qc = useQueryClient();
 	const opts = useFilterOptions();
 	const [showDupes, setShowDupes] = useState(false);
+	const [editPurposes, setEditPurposes] = useState<string[] | null>(null);
 	const [newestFirst, setNewestFirst] = useState(true);
 	const { data, isLoading, error } = useQuery({ queryKey: ['conversation', id], queryFn: () => api(`/conversations/${id}`) });
 	const draftQ = useQuery({ queryKey: ['draft', id], queryFn: () => api(`/conversations/${id}/draft`) });
@@ -111,6 +114,7 @@ export default function ConversationDetail() {
 							</div>
 						</Card>
 					)}
+					<StockPanel conversationId={id!} />
 					<Card accent={COLORS.pink}>
 						<div className="summary-box" style={{ border: 0, padding: 0 }}>
 							<div className="lbl"><MdAutoAwesome /> AI summary</div>
@@ -179,6 +183,27 @@ export default function ConversationDetail() {
 							<span className="k">Priority</span><span><b>{c.priority_score}</b>/100</span>
 							<span className="k">First reply</span><span>{c.first_response_minutes != null ? minutes(c.first_response_minutes) : 'Not replied yet'}</span>
 							<span className="k">Assigned to</span><span>{c.assignee_name || 'Unassigned'}</span>
+							{c.customer_id && !c.is_internal && <>
+								<span className="k">Reasons for contacting</span>
+								<span>
+									{editPurposes ? (
+										<>
+											<Chips options={PURPOSE_KEYS.map((k) => ({ v: k, l: shortPurpose(k) }))} value={editPurposes} onChange={setEditPurposes} />
+											<div className="row gap-4 mt-8">
+												<button className="btn sm primary" onClick={() => { update.mutate({ purposes: editPurposes }); setEditPurposes(null); }}>Save</button>
+												<button className="btn sm ghost" onClick={() => setEditPurposes(null)}>Cancel</button>
+											</div>
+										</>
+									) : (
+										<span className="row wrap gap-4">
+											{(c.purposes || []).map((p: string) => <span key={p} className="chip" title={purposeLabel(p)}>{shortPurpose(p)}</span>)}
+											{!(c.purposes || []).length && <span className="faint">Not set yet</span>}
+											{c.purposes_locked && <span className="badge">set by staff</span>}
+											{can('analyst') && <button className="btn ghost sm" onClick={() => setEditPurposes(c.purposes || [])}>Change</button>}
+										</span>
+									)}
+								</span>
+							</>}
 							{entityGroups.map(([k, v]) => (
 								<Fragment key={k}><span className="k">{k}</span><span className="row wrap gap-4">{v.map((x) => <span key={x} className="chip mono">{x}</span>)}</span></Fragment>
 							))}

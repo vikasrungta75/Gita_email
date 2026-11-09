@@ -235,10 +235,12 @@ export function Segmented<T extends string>({ value, options, onChange }: { valu
 }
 
 export function MultiSelect({
-	label, options, value, onChange, searchable, icon,
+	label, options, value, onChange, searchable, icon, keepLabel,
 }: {
 	label: string; options: { v: string | number; l: string; extra?: ReactNode }[]; value: (string | number)[]; onChange: (v: any[]) => void;
 	searchable?: boolean; icon?: ReactNode;
+	/** show "Label: choice" instead of the choice alone */
+	keepLabel?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [q, setQ] = useState('');
@@ -254,7 +256,7 @@ export function MultiSelect({
 		<div className="ms" ref={ref}>
 			<button className={`ms-btn ${value.length ? 'on' : ''}`} onClick={() => setOpen(!open)} type="button">
 				{icon}
-				{value.length === 0 ? label : value.length === 1 ? names[0] || label : `${label}: ${value.length}`}
+				{value.length === 0 ? label : value.length === 1 ? (keepLabel ? `${label}: ${names[0]}` : names[0] || label) : `${label}: ${value.length}`}
 				<MdExpandMore />
 			</button>
 			{open && (

@@ -7,7 +7,7 @@ import type { MailboxRow, SyncBatch } from './connectors/types';
 import { ingestMessages } from './ingest';
 import { buildProfiles } from './profiles';
 import { enrichCustomers } from './enrich';
-import { analysePending, backfillHealthHistory, backfillSubcategories } from './analyze';
+import { analysePending, backfillHealthHistory, backfillPurposes, backfillSubcategories } from './analyze';
 import { evaluateSlaAlerts, processEscalations } from './alerts';
 import { runDueReports } from './reports';
 import { evaluateDeliveryAlerts, sendDailyDigests } from './digest';
@@ -88,6 +88,7 @@ export async function runTick(opts: { budgetMs?: number; mailboxId?: number; rep
 	}
 	log.analysed = analysed;
 	log.subgroups = await backfillSubcategories(orgId).catch((e) => (console.error('[subgroups]', e.message), 0));
+	log.purposes = await backfillPurposes(orgId).catch((e) => (console.error('[purposes]', e.message), 0));
 	if (Date.now() < deadline - 20_000) log.profiles = await buildProfiles(orgId, deadline - 15_000).catch((e) => (console.error('[profiles]', e.message), null));
 	if (Date.now() < deadline - 20_000) log.enriched = await enrichCustomers(orgId, deadline - 15_000).catch((e) => (console.error('[enrich]', e.message), null));
 	// once a day, make sure history exists for every customer (cheap when already present)

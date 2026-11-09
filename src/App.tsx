@@ -29,6 +29,7 @@ import CustomerDb from './pages/admin/CustomerDb';
 import Profile from './pages/Profile';
 import Help from './pages/Help';
 import CategoryReport from './pages/CategoryReport';
+import Inventory from './pages/Inventory';
 import { Loader } from './components/ui';
 
 function Protected({ children, min }: { children: ReactNode; min?: 'viewer' | 'analyst' | 'manager' | 'admin' }) {
@@ -80,6 +81,7 @@ export default function App() {
 				<Route path="/admin/users" element={<Protected min="manager"><Users /></Protected>} />
 				<Route path="/admin/settings" element={<Protected min="manager"><Settings /></Protected>} />
 				<Route path="/admin/customers" element={<Protected min="analyst"><CustomerDb /></Protected>} />
+				<Route path="/inventory" element={<Protected min="analyst"><Inventory /></Protected>} />
 				<Route path="/admin/processing" element={<Protected min="analyst"><Processing /></Protected>} />
 				<Route path="/admin/audit" element={<Protected min="admin"><Audit /></Protected>} />
 				<Route path="*" element={<Navigate to="/overview" replace />} />

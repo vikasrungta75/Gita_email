@@ -1,3 +1,4 @@
+import { PURPOSES } from './purposes';
 export const CATEGORIES = [
 	'service_failure',
 	'delay',
@@ -117,12 +118,16 @@ export interface ThreadInput {
 	customerProfile?: string;
 	/** matched catalogue, FAQ and policy entries from the reference data */
 	reference?: { kind: string; title: string; text: string }[];
+	/** live stock (Tally) for the books the reader mentions, and Gita Press addresses when relevant */
+	stockInfo?: string;
 }
 
 export interface Analysis {
 	business_category: BusinessCategory;
 	/** subgroup within business_category, see taxonomy.ts */
 	subcategory: string;
+	/** why the reader contacted Gita Press (several allowed), see purposes.ts */
+	purposes: string[];
 	proposal: null | {
 		kind: string; // rfq, rfp, tender, quote, rate_request, proposal, contract_renewal
 		stage: ProposalStage;
@@ -170,6 +175,7 @@ export const ANALYSIS_SCHEMA = {
 	properties: {
 		business_category: { type: 'string', enum: [...BUSINESS_CATEGORIES], description: 'What kind of email thread this is. customer_service = a reader or customer raising a complaint, problem or general question; book_orders = placing, changing or asking about a book or e-book order (website, app, phone, post); kalyan = Kalyan or Kalyana-Kalpataru magazine subscriptions, renewals, issues not received; dispatch = parcels, VPP (value payable post), India Post or courier tracking, delivery and returns; sales_proposal = bulk orders, booksellers, distributors, temples, schools and institutions asking for quotes, price lists, trade discounts or dealership (either direction); publications = editorial, translations, new editions, errata, reprints, permissions and content questions; billing_finance = invoices, GST, payments, refunds, bank and accounts; vendor_partner = printing, paper, ink, binding, logistics and software suppliers; people_hr = careers, staff, hiring, payroll; internal = only staff talking to each other about anything not above; events_marketing = events, book fairs, media, newsletters; notifications = automated system messages.' },
 		subcategory: { type: 'string', description: 'The subgroup within business_category. Use one key from the list for that group given in the prompt.' },
+		purposes: { type: 'array', items: { type: 'string', enum: [...PURPOSES] }, description: 'Every reason the external party contacted Gita Press in this thread (one or more), from the purposes list in the prompt. Empty for internal, automated and supplier threads.' },
 		proposal: {
 			type: ['object', 'null'],
 			description: 'Only for sales_proposal threads (bulk orders, distributor or institutional quotes), otherwise null.',
@@ -248,7 +254,7 @@ export const ANALYSIS_SCHEMA = {
 		legal_or_churn_signal: { type: 'boolean', description: 'Mentions of legal action, consumer forum, social media complaints, chargebacks, cancelling a dealership or subscription, or formal claims.' },
 	},
 	required: [
-		'business_category', 'subcategory', 'proposal', 'summary', 'sentiment', 'sentiment_score', 'customer_state', 'urgency', 'escalation_risk', 'categories', 'topics',
+		'business_category', 'subcategory', 'purposes', 'proposal', 'summary', 'sentiment', 'sentiment_score', 'customer_state', 'urgency', 'escalation_risk', 'categories', 'topics',
 		'issues', 'action_items', 'entities', 'message_sentiments', 'requires_reply', 'suggested_reply', 'rag_suggestion',
 		'rag_reason', 'legal_or_churn_signal',
 	],

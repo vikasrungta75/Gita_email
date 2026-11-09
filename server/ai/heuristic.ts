@@ -4,6 +4,7 @@
  * distributors and general business email, in English and Hindi.
  */
 import { normaliseSubcategory } from './taxonomy';
+import { guessPurposes } from './purposes';
 import { CATEGORY_LABELS, type Analysis, type BusinessCategory, type Category, type ProposalStage, type Sentiment, type ThreadInput } from './types';
 
 const NEG: [RegExp, number][] = [
@@ -471,9 +472,11 @@ export function heuristicAnalyse(input: ThreadInput): Analysis {
 	const suggested_reply = awaiting ? draftReply(input, categories, ent, sentiment, lastInbound, all) : '';
 
 	if (proposal && !internalSummary) summaryParts.push(`Proposal stage: ${proposal.stage.replace(/_/g, ' ')}${proposal.deadline ? `, deadline ${proposal.deadline}` : ''}.`);
+	const subcategory = guessSubcategory(business_category, inboundText);
 	return {
 		business_category,
-		subcategory: guessSubcategory(business_category, inboundText),
+		subcategory,
+		purposes: input.isInternal || input.isAutomated ? [] : guessPurposes(inboundText, business_category, subcategory),
 		proposal,
 		summary: summaryParts.filter(Boolean).join(' '),
 		sentiment,

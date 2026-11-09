@@ -162,7 +162,8 @@ const { branches: brList, pickBranch, footerParts, HEAD_OFFICE } = await import(
 const bl = brList([{ city: 'Mumbai', state: 'Maharashtra', address: 'Gita Press, Test address, Mumbai 400002' }]);
 assert.equal(pickBranch(bl, { city: 'Bombay' }).branch.city, 'Mumbai');
 assert.equal(pickBranch(bl, { address: 'Flat 2, Dadar, Mumbai, 400014' }).branch.city, 'Mumbai');
-assert.equal(pickBranch(bl, { city: 'Kolkata' }).branch, HEAD_OFFICE, 'no address on file for Kolkata, so the head office');
+assert.equal(pickBranch(bl, { city: 'Kolkata' }).branch.address, 'Gobind Bhawan, 151, Mahatma Gandhi Road, Kolkata 700007', 'official branch list fills addresses not saved in Settings');
+assert.equal(pickBranch(bl, { city: 'Lucknow' }).branch, HEAD_OFFICE, 'no branch in Lucknow, so the head office');
 assert.equal(pickBranch(bl, {}).branch, HEAD_OFFICE);
 const fp = footerParts(HEAD_OFFICE);
 assert.ok(fp.text.includes('273005') && fp.text.includes('www.gitapress.org') && fp.html.includes('cid:gitapress-logo'));
@@ -182,5 +183,109 @@ const rep = await categoryReport({ id: admin.id, orgId, email: 't@gitapress.org'
 const g = rep.groups.find((x: any) => x.conversations > 0)!;
 assert.ok(g.label && g.subgroups.length, 'report group has subgroups');
 assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => n + x.conversations, 0));
+// ── stock uploads, stock and addresses in drafts, reasons for contacting, inventory ──
+{
+	const { writeXlsx, readXlsx } = await import('../server/xlsx');
+	const { importStock, importTitles, stockContext, currentStock, skeleton } = await import('../server/stock/stock');
+	const inventory = await import('../server/stock/inventory');
+	const { guessPurposes } = await import('../server/ai/purposes');
+	const { listCustomerDb } = await import('../server/profiles');
+	const { nearestBranch } = await import('../server/directory');
+	const HEAD = ['Sl No', 'Code', 'Product Name', 'GodownName', 'BatchName', 'Category', 'Unit', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value'];
+	const GROUPS = ['', '', '', '', '', '', '', 'Opening', '', '', 'Inwards', '', '', 'OutWards', '', '', 'Closing Balance', '', ''];
+	// [code, name, godown, price, opening, in, out, closing]
+	const tally = (unit: string, period: string, rows: [string, string, string, number, number, number, number, number, string?][]) => ({
+		name: unit, header: [unit],
+		rows: [['Gita Press Road'], ['Gita Stock Summary'], [period], GROUPS, HEAD,
+			...rows.map((r, i) => [String(i + 1), r[0], r[1], r[2], `${r[0]}_Rs.${r[3]}`, r[8] || 'Hindi', 'Nos', r[4], r[3], r[4] * r[3], r[5] || '', r[5] ? r[3] : '', r[5] ? r[5] * r[3] : '', r[6] || '', r[6] ? r[3] : '', r[6] ? r[6] * r[3] : '', r[7], r[3], r[7] * r[3]]),
+			['Total']],
+	});
+	const hqFile = (period: string, scale = 1) => writeXlsx([
+		{ ...tally('Govind Bhawan Karyalaya', period, [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Main Stock Location', 450, 5000, 0, 400 * scale, 4600], ['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Main Stock Location', 400, 50, 0, 0, 50], ['18', 'Gita Tattva Vivechani - ( 18 )', 'Main Stock Location', 200, 0, 0, 0, -5]]), name: 'MAIN STOCK' },
+		{ ...tally('Govind Bhawan Karyalaya', period, [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Retail Dispatch Stock Location', 450, 120, 0, 20 * scale, 100], ['1638', 'Hanuman Chalisa - ( 1638 )', 'Retail Dispatch Stock Location', 5, 900, 0, 300 * scale, 600, 'English']]), name: 'RETAIL STOCK' },
+		{ ...tally('Govind Bhawan Karyalaya', period, [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Semi Finished Books Location', 450, 7000, 0, 0, 7000]]), name: 'SEMI FINISHED' },
+	]);
+	const brFile = (period: string, scale = 1) => writeXlsx([
+		{ ...tally('Govind Bhawan Karyalaya, Unit- Gita Press', period, [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Delhi Branch Location', 450, 30, 0, 25 * scale, 5], ['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Delhi Branch Location', 480, 0, 0, 0, 0], ['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Delhi Godown Location', 450, 40, 0, 30, 10], ['1638', 'Hanuman Chalisa - ( 1638 )', 'Delhi Branch Location', 5, 500, 0, 0, 500, 'English']]), name: 'DELHI' },
+		{ ...tally('Gita Press - Bhilwara', period, [['1638', 'Hanuman Chalisa - ( 1638 )', 'Bhilwara Branch Location', 5, 100, 0, 90 * scale, 10, 'English'], ['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Bhilwara Branch Location', 450, 2, 0, 0, 2]]), name: 'BHILWARA' },
+	]);
+	assert.equal(readXlsx(hqFile('1-Oct-26 to 31-Oct-26')).length, 3, 'workbook written and read back');
+	await assert.rejects(importStock(orgId, null, 'hq', 'branch.xlsx', brFile('1-Oct-26 to 31-Oct-26')), /Branches slot/, 'branch file refused in the HQ slot');
+	const up1 = await importStock(orgId, null, 'hq', 'hq-oct.xlsx', hqFile('1-Oct-26 to 31-Oct-26'));
+	assert.deepEqual(up1.locations, ['gorakhpur']);
+	assert.ok(up1.warnings.some((w: string) => /negative/.test(w)));
+	await importStock(orgId, null, 'branch', 'br-oct.xlsx', brFile('1-Oct-26 to 31-Oct-26'));
+	await importStock(orgId, null, 'hq', 'hq-sep.xlsx', hqFile('1-Sep-26 to 30-Sep-26', 2));
+	await importStock(orgId, null, 'branch', 'br-sep.xlsx', brFile('1-Sep-26 to 30-Sep-26', 2));
+	const again = await importStock(orgId, null, 'branch', 'br-oct.xlsx', brFile('1-Oct-26 to 31-Oct-26'));
+	assert.equal(again.replaced, 1, 'same period uploaded again replaces the earlier upload');
+	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31'`)).n, 1, 'the replaced upload is gone');
+	// a branch file split in two for the same period: the second part does not remove the first
+	const part = writeXlsx([{ ...tally('Gita Press - Patna', '1-Oct-26 to 31-Oct-26', [['6', 'Gita Sadhak Sanjivani - ( 6 )', 'Patna Branch Location', 450, 9, 0, 1, 8]]), name: 'PATNA' }]);
+	assert.equal((await importStock(orgId, null, 'branch', 'patna.xlsx', part)).replaced, 0);
+	assert.equal((await one<any>(`select count(*)::int n from stock_uploads where scope='branch' and period_to='2026-10-31'`)).n, 2, 'both parts kept');
+	const cur = await currentStock(orgId);
+	const g6 = cur.books.get('6')!;
+	assert.equal(g6.locs.get('gorakhpur')!.qty, 4750, 'Gorakhpur = Main + Retail, semi-finished excluded');
+	assert.equal(g6.locs.get('gorakhpur')!.semi, 7000);
+	assert.equal(g6.locs.get('gorakhpur')!.price, 450, 'highest in-stock batch price');
+	assert.equal(g6.locs.get('delhi')!.qty, 15, 'branch = shop + godown');
+	assert.equal(g6.locs.get('delhi')!.price, 450, 'the ₹480 batch has no stock, so ₹450');
+	assert.equal(cur.books.get('18')!.locs.get('gorakhpur')!.qty, 0, 'negative stock counts as zero');
+	assert.equal(skeleton('रामचरितमानस'), skeleton('Ramcharitmanas'));
+	const ctxEn = await stockContext(orgId, 'Please send 2 copies of Gita Sadhak Sanjivani to Chandni Chowk, Delhi 110006.', {});
+	assert.equal(ctxEn.books[0].code, '6');
+	assert.equal(ctxEn.books[0].nearest?.key, 'delhi');
+	assert.match(ctxEn.prompt, /Gorakhpur 4,750 copies at ₹450; Delhi branch .* 15 copies at ₹450/);
+	assert.match(ctxEn.prompt, /post and abroad only from Gorakhpur/);
+	const ctxAbroad = await stockContext(orgId, 'Do you have Hanuman Chalisa in English? I live in London.', { country: 'United Kingdom' });
+	assert.equal(ctxAbroad.abroad, true);
+	assert.equal(ctxAbroad.books[0].nearest, null, 'abroad: Gorakhpur only');
+	const addr = await stockContext(orgId, 'What is the address of your Mumbai branch?', {});
+	assert.deepEqual(addr.addresses.map((d: any) => d.key), ['mumbai', 'gorakhpur']);
+	assert.match(addr.prompt, /9768954885/);
+	const all = await stockContext(orgId, 'Please share the addresses of your shops.', {});
+	assert.ok(all.fullList && all.addresses.length === 21, 'no place named: the whole list');
+	assert.ok(!all.prompt.includes('gmail.com'), 'Gmail branch addresses stay staff-only');
+	assert.equal(nearestBranch({ pin: '226001' })?.key, 'kanpur');
+	assert.equal(nearestBranch({ state: 'Gujarat' })?.key, 'surat');
+	// Hindi titles: template has every code; uploaded titles are matched in Devanagari emails
+	const titles = writeXlsx([{ name: 'Hindi titles', header: ['Code', 'English name', 'Hindi title'], rows: [['1638', 'Hanuman Chalisa', 'हनुमानचालीसा (अंग्रेजी)']] }]);
+	assert.equal((await importTitles(orgId, 't.xlsx', titles)).updated, 1);
+	const hiCtx = await stockContext(orgId, 'कृपया गीता साधक संजीवनी भेजें', {});
+	assert.equal(hiCtx.books[0]?.code, '6', 'Hindi email matched to the English Tally name');
+	// reasons for contacting
+	assert.deepEqual(guessPurposes('Kalyan ka November ank nahi mila. Subscriber no 12345', 'kalyan', 'issue_not_received'), ['kalyan']);
+	assert.ok(guessPurposes('I want to become a dealer for Gita Press books in my town', 'sales_proposal', 'dealership').includes('dealer'));
+	assert.ok(guessPurposes('We need 500 copies of Hanuman Chalisa for distribution at our temple', 'sales_proposal', 'institution_order').includes('bulk_order'));
+	assert.ok(guessPurposes('There is a typo on page 45 of Gita Tattva Vivechani, please correct it', 'publications', 'errata').includes('suggestion_content'));
+	assert.deepEqual(guessPurposes('Staff meeting at 4', 'internal', 'internal_coordination'), []);
+	const kal = { ...base, providerMessageId: 'k1', internetMessageId: '<k1@gmail.com>', from: { address: 'ravi.k@gmail.com', name: 'Ravi Kumar' }, to: [{ address: 'kalyan@gitapress.org', name: '' }], subject: 'Kalyan issue not received', bodyText: 'Respected sir, my Kalyan October issue has not arrived. Also is Gita Sadhak Sanjivani available? My PIN is 110006.', sentAt: new Date() };
+	await ingestMessages(org, m1, [kal]);
+	await analysePending(orgId, 10);
+	const kc = await one<any>(`select * from conversations where normalized_subject='kalyan issue not received'`);
+	assert.ok(kc.purposes.includes('kalyan') && kc.purposes.includes('availability_price'), `several reasons on one thread: ${kc.purposes}`);
+	const kd = await one<any>('select body from reply_drafts where conversation_id=$1', [kc.id]);
+	assert.match(kd.body, /Gorakhpur: 4,750 copies at ₹450; Delhi branch: 15 copies at ₹450/, 'rules-engine draft carries live stock');
+	const kcu = await one<any>('select purposes from customers where id=$1', [kc.customer_id]);
+	assert.ok(kcu.purposes.includes('kalyan'), 'customer record collects the reasons');
+	assert.equal((await one<any>('select count(*)::int n from book_requests where conversation_id=$1', [kc.id])).n, 1, 'asked-for book recorded');
+	const dbAny = await listCustomerDb(orgId, new URLSearchParams({ purposes: 'kalyan' }));
+	assert.ok(dbAny.rows.some((r: any) => r.id === kc.customer_id));
+	const dbNot = await listCustomerDb(orgId, new URLSearchParams({ purposes: 'kalyan', not: 'book_order,availability_price' }));
+	assert.ok(!dbNot.rows.some((r: any) => r.id === kc.customer_id), 'has A but never B');
+	// inventory: two months of data, sales from retail and shops only
+	const ov = await inventory.overview(orgId);
+	assert.deepEqual(ov.months.map((m: any) => m.month), ['2026-09', '2026-10']);
+	assert.equal(ov.months[1].qty, 300 + 20 + 25 + 90 + 1, 'October sales: HQ retail + Delhi shop + Bhilwara + Patna (Main Stock and Delhi godown are transfers)');
+	const top = await inventory.topSellers(orgId, {});
+	assert.equal(top.rows[0].code, '1638');
+	const rep2 = await inventory.replenishment(orgId, {});
+	assert.ok(rep2.rows.some((x: any) => x.location === 'bhilwara' && x.code === '1638' && x.send > 0), 'Bhilwara needs Hanuman Chalisa');
+	const st = await inventory.stockStatus(orgId, { location: 'delhi' });
+	assert.ok(st.rows.find((x: any) => x.code === '1638')?.status === 'no_sales');
+	assert.ok((await inventory.crossSell(orgId)).segments.length > 3);
+	assert.ok(await inventory.customerSuggestions(orgId, kc.customer_id));
+}
 console.log('All pipeline tests passed');
 await getPool().end();

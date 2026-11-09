@@ -183,16 +183,24 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	if (qs.get('type')) where.push(`coalesce(${P}->>'type', c.kind) = ${p(qs.get('type'))}`);
 	if (qs.get('language')) where.push(`${P}->>'language' = ${p(qs.get('language'))}`);
 	if (qs.get('state')) where.push(`${P}->>'state' ilike ${p(qs.get('state'))}`);
+	if (qs.get('city')) where.push(`${P}->>'city' ilike ${p(`%${qs.get('city')}%`)}`);
+	if (qs.get('country') === 'india') where.push(`coalesce(nullif(${P}->>'country',''), 'India') ilike 'india'`);
+	if (qs.get('country') === 'abroad') where.push(`(coalesce(${P}->>'country','') <> '' and ${P}->>'country' not ilike 'india' or 'international' = any(c.purposes))`);
+	// why they contacted: any (default) or all of the chosen purposes, and none of the excluded ones
+	const purposes = (qs.get('purposes') || '').split(',').map((x) => x.trim()).filter(Boolean);
+	const not = (qs.get('not') || '').split(',').map((x) => x.trim()).filter(Boolean);
+	if (purposes.length) where.push(qs.get('purposeMode') === 'all' ? `c.purposes @> ${p(purposes)}::text[]` : `c.purposes && ${p(purposes)}::text[]`);
+	if (not.length) where.push(`not (c.purposes && ${p(not)}::text[])`);
 	if (qs.get('has') === 'phone') where.push(`jsonb_array_length(coalesce(${P}->'phones','[]')) > 0`);
 	if (qs.get('has') === 'address') where.push(`coalesce(${P}->>'address','') <> ''`);
 	if (qs.get('has') === 'orders') where.push(`jsonb_array_length(coalesce(${P}->'order_refs','[]')) > 0`);
 	if (qs.get('has') === 'subscriber') where.push(`jsonb_array_length(coalesce(${P}->'subscriber_numbers','[]')) > 0`);
 	const sort = { recent: 'c.last_contact_at desc nulls last', name: 'c.name', threads: 'threads desc' }[qs.get('sort') || 'recent'] || 'c.last_contact_at desc nulls last';
-	const limit = Math.min(Number(qs.get('limit')) || 50, qs.get('format') === 'csv' ? 20000 : 200);
+	const limit = Math.min(Number(qs.get('limit')) || 50, ['csv', 'xlsx'].includes(qs.get('format') || '') ? 20000 : 200);
 	const offset = Math.max(0, Number(qs.get('offset')) || 0);
 	const W = where.join(' and ');
 	const rows = await q<any>(
-		`select c.id, c.name, c.kind, c.tier, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
+		`select c.id, c.name, c.kind, c.tier, c.purposes, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
 		        (select count(*) from conversations cv where cv.customer_id=c.id)::int as threads,
 		        (select count(*) from conversations cv where cv.customer_id=c.id and cv.awaiting_reply and cv.status in ('open','in_progress'))::int as waiting,
 		        (select min(cv.first_message_at) from conversations cv where cv.customer_id=c.id) as first_contact
@@ -212,7 +220,9 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 		params,
 	);
 	const types = await q<any>(`select coalesce(${P}->>'type', c.kind) as k, count(*)::int as n from customers c where ${W} group by 1 order by 2 desc`, params);
-	return { rows: rows.map((r) => ({ ...r, p: merged(r) })), totals: { ...totals, types }, offset, limit };
+	const purposeCounts = await q<any>(`select x.p as k, count(*)::int as n from customers c, unnest(c.purposes) x(p) where ${W} group by 1 order by 2 desc`, params);
+	const languages = await q<any>(`select ${P}->>'language' as k, count(*)::int as n from customers c where ${W} and coalesce(${P}->>'language','') <> '' group by 1 order by 2 desc limit 30`, params);
+	return { rows: rows.map((r) => ({ ...r, p: merged(r) })), totals: { ...totals, types, purposes: purposeCounts, languages }, offset, limit };
 }
 
 export async function updateProfile(orgId: number, id: number, input: Record<string, unknown>) {
