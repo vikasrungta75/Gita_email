@@ -20,11 +20,7 @@ import Insights from './pages/Insights';
 import MailSage from './pages/MailSage';
 import Alerts from './pages/Alerts';
 import Reports from './pages/Reports';
-import Mailboxes from './pages/admin/Mailboxes';
-import Users from './pages/admin/Users';
-import Settings from './pages/admin/Settings';
-import Audit from './pages/admin/Audit';
-import Processing from './pages/admin/Processing';
+import Settings, { SettingsRedirect } from './pages/admin/Settings';
 import CustomerDb from './pages/admin/CustomerDb';
 import Profile from './pages/Profile';
 import Help from './pages/Help';
@@ -77,13 +73,14 @@ export default function App() {
 				<Route path="/alerts" element={<Alerts />} />
 				<Route path="/reports" element={<Reports />} />
 				<Route path="/profile" element={<Profile />} />
-				<Route path="/admin/mailboxes" element={<Protected min="analyst"><Mailboxes /></Protected>} />
-				<Route path="/admin/users" element={<Protected min="manager"><Users /></Protected>} />
-				<Route path="/admin/settings" element={<Protected min="manager"><Settings /></Protected>} />
+				<Route path="/admin/mailboxes" element={<SettingsRedirect tab="mailboxes" />} />
+				<Route path="/admin/users" element={<SettingsRedirect tab="users" />} />
+				<Route path="/admin/settings" element={<Protected min="analyst"><Settings /></Protected>} />
+				<Route path="/admin/addresses" element={<SettingsRedirect tab="addresses" />} />
 				<Route path="/admin/customers" element={<Protected min="analyst"><CustomerDb /></Protected>} />
 				<Route path="/inventory" element={<Protected min="analyst"><Inventory /></Protected>} />
-				<Route path="/admin/processing" element={<Protected min="analyst"><Processing /></Protected>} />
-				<Route path="/admin/audit" element={<Protected min="admin"><Audit /></Protected>} />
+				<Route path="/admin/processing" element={<SettingsRedirect tab="status" />} />
+				<Route path="/admin/audit" element={<SettingsRedirect tab="audit" />} />
 				<Route path="*" element={<Navigate to="/overview" replace />} />
 			</Route>
 		</Routes>

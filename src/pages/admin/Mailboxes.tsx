@@ -36,8 +36,8 @@ export default function Mailboxes() {
 	const refresh = () => { qc.invalidateQueries(); };
 
 	useEffect(() => {
-		if (sp.get('connected')) { toast(`Connected ${sp.get('connected')}. The first sync has started.`); setSp({}); }
-		if (sp.get('error')) { toast(`Connection failed: ${sp.get('error')}`, 'error'); setSp({}); }
+		if (sp.get('connected')) { toast(`Connected ${sp.get('connected')}. The first sync has started.`); setSp((p) => { p.delete('connected'); return p; }, { replace: true }); }
+		if (sp.get('error')) { toast(`Connection failed: ${sp.get('error')}`, 'error'); setSp((p) => { p.delete('error'); return p; }, { replace: true }); }
 	}, [sp, setSp, toast]);
 
 	const connect = useMutation({

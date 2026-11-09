@@ -71,7 +71,7 @@ Wait until it finishes. Warnings are normal; an "ERR!" line is not (see Troubles
 | `JWT_SECRET`, `ENCRYPTION_KEY`, `INTERNAL_API_SECRET` | Netlify file | Must be identical if you will copy the cloud data (Step 6). For a fresh start with no cloud data, run `npm run local:keys` and paste what it prints |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | Netlify file, or new | Your sign-in for the local app |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Netlify file | For Google sign-in and personal Gmail |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Netlify file, if it is there | Leave blank if the key was uploaded in Admin → Mailboxes |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Netlify file, if it is there | Leave blank if the key was uploaded in Settings → Mailboxes |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Netlify file | Keep `AI_PROVIDER=anthropic` |
 | `SMTP_…` or `RESEND_API_KEY`, `MAIL_FROM` | Netlify file, if set | For alert and report emails |
 | `ORG_NAME`, `INTERNAL_DOMAINS` | Already filled | Gita Press, Gorakhpur and gitapress.org |
@@ -152,16 +152,16 @@ npm run local
 
 Tick each one:
 
-1. **Mailboxes:** Admin → **Mailboxes** lists booksales@, retailsales@, mumbai@ and manager@.
+1. **Mailboxes:** **Settings → Mailboxes** lists booksales@, retailsales@, mumbai@ and manager@.
    * Fresh start: upload the Google service-account key (JSON) there and add the four addresses.
 2. **Sync:** press **Sync now** on one mailbox. Within a few minutes the terminal shows `[worker] tick done`.
-3. **Processing:** Admin → **Processing status** shows emails read and "Analysed by Claude" rising.
+3. **Processing:** **Settings → System status** shows emails read and "Analysed by Claude" rising.
    No red banner about Claude.
 4. **Email and drafts:** **Email** shows threads with categories; **Replies to send** shows drafts
    with yellow items.
 5. **Send test:** reply to an email you sent yourself from a personal address; check it arrives in
    the same Gmail thread with the footer.
-6. **Alerts:** if SMTP or Resend is set, Admin → Settings → send a test report to yourself.
+6. **Alerts:** if SMTP or Resend is set, Reports → send a test report to yourself.
 7. **Your own Gmail:** sign out, then **Sign in with Google**. It should come back to localhost and
    connect your mailbox.
 

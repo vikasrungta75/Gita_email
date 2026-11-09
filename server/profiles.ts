@@ -56,7 +56,7 @@ export function rulesProfile(texts: string[], refs: { orders: string[]; books: s
 		}
 	}
 	const state = address.match(STATE_RE)?.[0] || '';
-	const city = address ? (address.split(',').map((x) => x.trim()).reverse().find((x) => /^[A-Za-zऀ-ॿ .]{3,30}$/.test(x) && !STATE_RE.test(x) && !/india|dist|district|post|po\b|near|road|nagar|colony|street|sector|house|flat|village/i.test(x)) || '') : '';
+	const city = address ? (address.split(',').map((x) => x.trim()).reverse().find((x) => /^[A-Za-zऀ-ॿ .]{3,30}$/.test(x) && !STATE_RE.test(x) && !/india|dist|district|post|po\b|near|road|nagar|colony|street|sector|house|flat|village/i.test(x) && !/^(respected|dear|sir|madam|hello|hi|namaste|pranam|regards|thanks|my|our|please|kindly|आदरणीय|महोदय|प्रणाम|नमस्ते)\b/i.test(x)) || '') : '';
 	const dev = (all.match(/[ऀ-ॿ]/g) || []).length;
 	const lat = (all.match(/[A-Za-z]/g) || []).length;
 	const gstin = all.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/)?.[0] || '';
@@ -184,8 +184,10 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	if (qs.get('language')) where.push(`${P}->>'language' = ${p(qs.get('language'))}`);
 	if (qs.get('state')) where.push(`${P}->>'state' ilike ${p(qs.get('state'))}`);
 	if (qs.get('city')) where.push(`${P}->>'city' ilike ${p(`%${qs.get('city')}%`)}`);
-	if (qs.get('country') === 'india') where.push(`coalesce(nullif(${P}->>'country',''), 'India') ilike 'india'`);
-	if (qs.get('country') === 'abroad') where.push(`(coalesce(${P}->>'country','') <> '' and ${P}->>'country' not ilike 'india' or 'international' = any(c.purposes))`);
+	// country as recorded; a reader with an Indian PIN code and no country counts as India
+	const COUNTRY = `initcap(coalesce(nullif(trim(${P}->>'country'),''), case when ${P}->>'pin' ~ '^[1-9][0-9]{5}$' then 'India' end))`;
+	if (qs.get('country') === '-') where.push(`${COUNTRY} is null`);
+	else if (qs.get('country')) where.push(`${COUNTRY} = initcap(${p(qs.get('country'))})`);
 	// why they contacted: any (default) or all of the chosen purposes, and none of the excluded ones
 	const purposes = (qs.get('purposes') || '').split(',').map((x) => x.trim()).filter(Boolean);
 	const not = (qs.get('not') || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -195,12 +197,19 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	if (qs.get('has') === 'address') where.push(`coalesce(${P}->>'address','') <> ''`);
 	if (qs.get('has') === 'orders') where.push(`jsonb_array_length(coalesce(${P}->'order_refs','[]')) > 0`);
 	if (qs.get('has') === 'subscriber') where.push(`jsonb_array_length(coalesce(${P}->'subscriber_numbers','[]')) > 0`);
-	const sort = { recent: 'c.last_contact_at desc nulls last', name: 'c.name', threads: 'threads desc' }[qs.get('sort') || 'recent'] || 'c.last_contact_at desc nulls last';
+	// sort by any column, either way; empty values last
+	const dir = qs.get('dir') === 'asc' ? 'asc' : qs.get('dir') === 'desc' ? 'desc' : '';
+	const SORTS: Record<string, [string, 'asc' | 'desc']> = {
+		recent: ['c.last_contact_at', 'desc'], name: ['lower(c.name)', 'asc'], type: [`coalesce(${P}->>'type', c.kind)`, 'asc'], place: [`lower(nullif(${P}->>'city',''))`, 'asc'],
+		country: [COUNTRY, 'asc'], language: [`nullif(${P}->>'language','')`, 'asc'], threads: ['threads', 'desc'], reasons: ['cardinality(c.purposes)', 'desc'],
+	};
+	const [col, def] = SORTS[qs.get('sort') || 'recent'] || SORTS.recent;
+	const sort = `${col} ${dir || def} nulls last, c.id`;
 	const limit = Math.min(Number(qs.get('limit')) || 50, ['csv', 'xlsx'].includes(qs.get('format') || '') ? 20000 : 200);
 	const offset = Math.max(0, Number(qs.get('offset')) || 0);
 	const W = where.join(' and ');
 	const rows = await q<any>(
-		`select c.id, c.name, c.kind, c.tier, c.purposes, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
+		`select c.id, c.name, c.kind, c.tier, c.purposes, ${COUNTRY} as country, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
 		        (select count(*) from conversations cv where cv.customer_id=c.id)::int as threads,
 		        (select count(*) from conversations cv where cv.customer_id=c.id and cv.awaiting_reply and cv.status in ('open','in_progress'))::int as waiting,
 		        (select min(cv.first_message_at) from conversations cv where cv.customer_id=c.id) as first_contact
@@ -221,8 +230,9 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	);
 	const types = await q<any>(`select coalesce(${P}->>'type', c.kind) as k, count(*)::int as n from customers c where ${W} group by 1 order by 2 desc`, params);
 	const purposeCounts = await q<any>(`select x.p as k, count(*)::int as n from customers c, unnest(c.purposes) x(p) where ${W} group by 1 order by 2 desc`, params);
+	const countries = await q<any>(`select ${COUNTRY} as k, count(*)::int as n from customers c where ${W} group by 1 order by (${COUNTRY} = 'India') desc nulls last, 2 desc limit 60`, params);
 	const languages = await q<any>(`select ${P}->>'language' as k, count(*)::int as n from customers c where ${W} and coalesce(${P}->>'language','') <> '' group by 1 order by 2 desc limit 30`, params);
-	return { rows: rows.map((r) => ({ ...r, p: merged(r) })), totals: { ...totals, types, purposes: purposeCounts, languages }, offset, limit };
+	return { rows: rows.map((r) => ({ ...r, p: merged(r) })), totals: { ...totals, types, purposes: purposeCounts, languages, countries }, offset, limit };
 }
 
 export async function updateProfile(orgId: number, id: number, input: Record<string, unknown>) {

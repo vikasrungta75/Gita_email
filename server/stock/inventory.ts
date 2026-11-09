@@ -35,8 +35,8 @@ const cache = new Map<number, Facts>();
 
 /** Non-overlapping uploads per location (longest period first). */
 async function pairsFor(orgId: number): Promise<{ pairs: Pair[]; key: string }> {
-	const ups = await q<any>(`select id, locations, period_from::text as f, period_to::text as t, uploaded_at from stock_uploads where org_id=$1`, [orgId]);
-	const key = `${ups.length}:${ups.map((u) => u.id).reduce((a, b) => Math.max(a, b), 0)}`;
+	const ups = await q<any>(`select id, locations, period_from::text as f, period_to::text as t, uploaded_at from stock_uploads where org_id=$1 and deleted_at is null`, [orgId]);
+	const key = ups.map((u) => `${u.id}:${u.locations.join(',')}`).sort().join('|');
 	const byLoc = new Map<string, { id: number; f: string; t: string; d: number; at: number }[]>();
 	for (const u of ups) for (const l of u.locations) {
 		const list = byLoc.get(l) || [];
@@ -166,7 +166,7 @@ const branchKeys = () => DIRECTORY.filter((d) => !d.head_office && !d.no_stock).
 
 export async function overview(orgId: number) {
 	const [f, cur, s] = await Promise.all([facts(orgId), currentStock(orgId), inventorySettings(orgId)]);
-	const uploads = await one<any>(`select count(*)::int as n, count(*) filter (where scope='hq')::int as hq, count(*) filter (where scope='branch')::int as branch, min(period_from)::text as first, max(period_to)::text as last from stock_uploads where org_id=$1`, [orgId]);
+	const uploads = await one<any>(`select count(*)::int as n, count(*) filter (where scope='hq')::int as hq, count(*) filter (where scope='branch')::int as branch, min(period_from)::text as first, max(period_to)::text as last from stock_uploads where org_id=$1 and deleted_at is null`, [orgId]);
 	const locs = [HQ_KEY, ...branchKeys()];
 	const branches = locs.map((loc) => {
 		let qty = 0;

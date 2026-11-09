@@ -90,7 +90,7 @@ Don't paste the service account JSON into Netlify. Netlify functions allow only 
 
 1. Open `https://gitamail.netlify.app` and select **Sign in with Google** with the `ADMIN_EMAIL` account.
 2. Google asks once to allow Gita Mail to read and send email. Select **Allow**. Your inbox connects and the last 90 days start syncing.
-3. **Shared mailboxes:** go to **Admin → Mailboxes**.
+3. **Shared mailboxes:** go to **Settings → Mailboxes**.
    * Select **Upload service account key** and choose the JSON file from step 4.
    * Select **Add mailbox**, type e.g. `orders@gitapress.org`, then select **Test access** and **Add mailbox**. Repeat for each team mailbox.
 4. **Settings → Reply drafts:** add reference information the AI may use in replies, so fewer items are left in yellow. Examples: dispatch times, the Kalyan subscription fee, the bulk order process and refund timelines. Set the signature too.

@@ -81,7 +81,7 @@ mailboxes (booksales@, retailsales@, mumbai@, manager@) needs no change.
 
    The first start takes a few minutes while it downloads and builds.
 4. Open **http://localhost:8888** and sign in with your admin email and password, or with Google.
-5. Go to **Admin → Processing status**: after about 5 minutes the counts start rising.
+5. Go to **Settings → System status**: after about 5 minutes the counts start rising.
 
 Everyday commands:
 

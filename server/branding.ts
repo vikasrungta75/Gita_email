@@ -7,7 +7,7 @@
 import { one } from './db';
 import { getOrg } from './settings';
 import { merged } from './profiles';
-import { DIRECTORY, placeInText } from './directory';
+import { placeInText, resolveDirectory } from './directory';
 
 export interface Branch { city: string; state: string; address: string; phone?: string; email?: string; address_hi?: string; key?: string }
 
@@ -23,18 +23,12 @@ export const HEAD_OFFICE: Branch = {
 	email: 'booksales@gitapress.org',
 };
 
-/** Branches from the official list (server/directory.ts); a value saved in Settings replaces the default. */
-export function branches(saved?: Branch[]): Branch[] {
-	const byCity = new Map((saved || []).map((b) => [b.city.toLowerCase(), b]));
-	const pick = (v: string | undefined, d: string) => (v && v.trim() ? v : d);
-	return DIRECTORY.filter((d) => !d.head_office).map((d) => {
-		const s = byCity.get(d.city.toLowerCase()) || ({} as Partial<Branch>);
-		return {
-			key: d.key, city: d.city, state: d.state,
-			address: pick(s.address, `${d.address} ${d.pin}`), address_hi: pick(s.address_hi, `${d.address_hi} ${d.pin}`),
-			phone: pick(s.phone, d.phones.join(', ')), email: pick(s.email, d.email || ''),
-		};
-	});
+/** Branches from the official list with Settings corrections (server/directory.ts). Accepts org settings or an older saved list. */
+export function branches(input?: Branch[] | Record<string, any>): Branch[] {
+	const settings = Array.isArray(input) ? { branches: input } : input || {};
+	return resolveDirectory(settings).filter((d) => !d.head_office).map((d) => ({
+		key: d.key, city: d.city, state: d.state, address: `${d.address} ${d.pin}`, address_hi: `${d.address_hi} ${d.pin}`, phone: d.phones.join(', '), email: d.email || '',
+	}));
 }
 
 /** The branch in the reader's city (address on file), else the head office. */
@@ -50,10 +44,10 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 export function footerParts(b: Branch, orgName = 'Gita Press, Gorakhpur') {
 	const title = b === HEAD_OFFICE || b.city === 'Gorakhpur' ? orgName : `Gita Press, ${b.city} branch`;
-	const text = ['', '--', title, b.address, b.phone ? `Phone: ${b.phone}` : '', b.email ? `Email: ${b.email}` : '', WEBSITE].filter((x, i) => i < 2 || x).join('\n');
+	const text = ['', '--', title, b.address, b.address_hi && b.address_hi !== b.address ? b.address_hi : '', b.phone ? `Phone: ${b.phone}` : '', b.email ? `Email: ${b.email}` : '', WEBSITE].filter((x, i) => i < 2 || x).join('\n');
 	const html = `<table cellpadding="0" cellspacing="0" style="margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px;font-family:Arial,'Noto Sans','Noto Sans Devanagari',sans-serif;font-size:12.5px;line-height:1.5;color:#475569"><tr>
 <td style="padding-right:12px;vertical-align:top"><img src="cid:gitapress-logo" width="48" height="46" alt="Gita Press" style="display:block"></td>
-<td style="vertical-align:top"><b style="color:#0f172a;font-size:13.5px">${esc(title)}</b><br>${esc(b.address)}${b.phone ? `<br>Phone: ${esc(b.phone)}` : ''}${b.email ? `<br>Email: <a href="mailto:${esc(b.email)}" style="color:#4f46e5">${esc(b.email)}</a>` : ''}<br><a href="${WEBSITE}" style="color:#4f46e5">www.gitapress.org</a></td>
+<td style="vertical-align:top"><b style="color:#0f172a;font-size:13.5px">${esc(title)}</b><br>${esc(b.address)}${b.address_hi && b.address_hi !== b.address ? `<br>${esc(b.address_hi)}` : ''}${b.phone ? `<br>Phone: ${esc(b.phone)}` : ''}${b.email ? `<br>Email: <a href="mailto:${esc(b.email)}" style="color:#4f46e5">${esc(b.email)}</a>` : ''}<br><a href="${WEBSITE}" style="color:#4f46e5">www.gitapress.org</a></td>
 </tr></table>`;
 	return { title, text, html };
 }
@@ -64,6 +58,6 @@ export async function footerForConversation(orgId: number, conversationId: numbe
 	if ((org.settings as any).replyFooter === false) return null;
 	const cu = await one<any>('select cu.profile, cu.profile_manual from conversations c left join customers cu on cu.id=c.customer_id where c.id=$1', [conversationId]);
 	const p = cu ? merged(cu) : {};
-	const { branch, why } = pickBranch(branches((org.settings as any).branches), { city: p.city, address: p.address });
+	const { branch, why } = pickBranch(branches(org.settings as any), { city: p.city, address: p.address });
 	return { branch, why, ...footerParts(branch, org.name) };
 }

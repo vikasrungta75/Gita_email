@@ -15,7 +15,7 @@ import { HttpError } from '../http';
 import { getOrg, invalidateOrg } from '../settings';
 import { readTable, writeXlsx } from '../xlsx';
 import { detectScope, godownKind, readTally } from './tally';
-import { ADDRESS_INTENT, BY_KEY, DIRECTORY, HQ_KEY, POST_NOTE, POST_NOTE_HI, entryText, isAbroad, locationForSheet, locationLabel, nearestBranch, placeInText, type Place } from '../directory';
+import { ADDRESS_INTENT, BY_KEY, DIRECTORY, resolveDirectory, HQ_KEY, POST_NOTE, POST_NOTE_HI, entryText, isAbroad, locationForSheet, locationLabel, nearestBranch, placeInText, type Place } from '../directory';
 
 // ── settings ───────────────────────────────────────────────────────────────
 
@@ -114,22 +114,23 @@ export async function importStock(orgId: number, userId: number | null, slot: 'h
 		if (missing.length) warnings.push(`No sheet for: ${missing.join(', ')}. Their last uploaded stock stays in use`);
 	}
 
-	// the same period uploaded again replaces the earlier figures for the same locations (so a branch file may be split in two)
+	// the same period uploaded again replaces the earlier figures for the same locations (so a branch file may be split in two).
+	// Nothing is erased: the older upload keeps its rows and file; the replaced locations are only taken out of use.
 	const replaced = await q<any>(
-		`update stock_uploads set locations = array(select x from unnest(locations) x where not (x = any($5::text[])))
-		  where org_id=$1 and scope=$2 and period_from=$3 and period_to=$4 and locations && $5::text[] returning id`,
+		`update stock_uploads set replaced_locations = array(select distinct x from unnest(replaced_locations || (select array_agg(y) from unnest(locations) y where y = any($5::text[]))) x),
+		        locations = array(select x from unnest(locations) x where not (x = any($5::text[])))
+		  where org_id=$1 and scope=$2 and period_from=$3 and period_to=$4 and deleted_at is null and locations && $5::text[] returning id, cardinality(locations) as left`,
 		[orgId, scope, period.from, period.to, locations],
 	);
-	if (replaced.length) {
-		await q('delete from stock_rows where upload_id = any($1::bigint[]) and location = any($2::text[])', [replaced.map((r) => r.id), locations]);
-		await q(`delete from stock_uploads where id = any($1::bigint[]) and cardinality(locations) = 0`, [replaced.map((r) => r.id)]);
-		await q(`update stock_uploads u set row_count = (select count(*) from stock_rows r where r.upload_id=u.id) where id = any($1::bigint[])`, [replaced.map((r) => r.id)]);
-	}
+	const emptied = replaced.filter((r) => r.left === 0).map((r) => r.id);
+	if (emptied.length) await q(`update stock_uploads set deleted_at=now(), deleted_by=$2, deleted_reason='replaced' where id = any($1::bigint[])`, [emptied, userId]);
 	const up = await one<any>(
 		`insert into stock_uploads (org_id, scope, file_name, period_from, period_to, locations, sheets, row_count, warnings, uploaded_by)
 		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
 		[orgId, scope, fileName.slice(0, 200), period.from, period.to, locations, JSON.stringify(sheetInfo), rows.length, warnings, userId],
 	);
+	// the original Excel file is kept, so it can always be downloaded again exactly as uploaded
+	await q('insert into stock_files (upload_id, bytes) values ($1, $2)', [up.id, Buffer.from(data)]);
 	const CHUNK = 4000;
 	for (let i = 0; i < rows.length; i += CHUNK) {
 		const part = rows.slice(i, i + CHUNK);
@@ -165,17 +166,48 @@ export async function importStock(orgId: number, userId: number | null, slot: 'h
 
 export async function listUploads(orgId: number) {
 	return q<any>(
-		`select u.id, u.scope, u.file_name, u.period_from, u.period_to, u.locations, u.sheets, u.row_count, u.warnings, u.uploaded_at, us.full_name as uploaded_by
-		   from stock_uploads u left join users us on us.id=u.uploaded_by where u.org_id=$1 order by u.period_to desc, u.uploaded_at desc limit 500`,
+		`select u.id, u.scope, u.file_name, u.period_from, u.period_to, u.locations, u.replaced_locations, u.sheets, u.row_count, u.warnings, u.uploaded_at,
+		        us.full_name as uploaded_by, u.deleted_at, u.deleted_reason, ud.full_name as deleted_by, exists (select 1 from stock_files f where f.upload_id=u.id) as has_file
+		   from stock_uploads u left join users us on us.id=u.uploaded_by left join users ud on ud.id=u.deleted_by
+		  where u.org_id=$1 order by u.deleted_at is not null, u.period_to desc, u.uploaded_at desc limit 1000`,
 		[orgId],
 	);
 }
 
-export async function deleteUpload(orgId: number, id: number) {
-	const r = await q('delete from stock_uploads where id=$1 and org_id=$2 returning id', [id, orgId]);
-	if (!r.length) throw new HttpError(404, 'Upload not found');
-	cache.delete(orgId);
+/** Removing an upload hides it from stock and sales; it can be restored. Only an admin can erase it for good. */
+export async function deleteUpload(orgId: number, id: number, userId: number | null, permanent = false) {
+	if (permanent) {
+		const r = await q(`delete from stock_uploads where id=$1 and org_id=$2 and deleted_at is not null returning id`, [id, orgId]);
+		if (!r.length) throw new HttpError(400, 'Only a removed upload can be erased permanently. Remove it first.');
+	} else {
+		const r = await q(`update stock_uploads set deleted_at=now(), deleted_by=$3, deleted_reason='removed' where id=$1 and org_id=$2 and deleted_at is null returning id`, [id, orgId, userId]);
+		if (!r.length) throw new HttpError(404, 'Upload not found');
+	}
+	await forgetAll(orgId);
 	return { success: true };
+}
+
+export async function restoreUpload(orgId: number, id: number) {
+	const u = await one<any>('select * from stock_uploads where id=$1 and org_id=$2', [id, orgId]);
+	if (!u || !u.deleted_at) throw new HttpError(404, 'Removed upload not found');
+	if (u.deleted_reason === 'replaced') throw new HttpError(400, 'This upload was replaced by a newer upload for the same period. Remove the newer one first, then upload this file again (download it here).');
+	const clash = await one<any>(
+		`select id from stock_uploads where org_id=$1 and scope=$2 and period_from=$3 and period_to=$4 and deleted_at is null and locations && $5::text[] and id<>$6`,
+		[orgId, u.scope, u.period_from, u.period_to, u.locations, id],
+	);
+	if (clash) throw new HttpError(400, 'Another upload for the same period and locations is in use. Remove it first.');
+	await q('update stock_uploads set deleted_at=null, deleted_by=null, deleted_reason=null where id=$1', [id]);
+	await forgetAll(orgId);
+	return { success: true };
+}
+
+export async function uploadFile(orgId: number, id: number) {
+	return one<any>('select u.file_name, f.bytes, f.content_type from stock_uploads u join stock_files f on f.upload_id=u.id where u.id=$1 and u.org_id=$2', [id, orgId]);
+}
+
+async function forgetAll(orgId: number) {
+	cache.delete(orgId);
+	await import('./inventory').then((m) => m.forgetFacts(orgId));
 }
 
 // ── current stock ──────────────────────────────────────────────────────────
@@ -208,7 +240,7 @@ const cache = new Map<number, Current>();
 
 /** The latest upload for each location (by period end, then upload time). */
 export async function latestUploads(orgId: number): Promise<Record<string, { id: number; to: string }>> {
-	const ups = await q<any>('select id, locations, period_to::text as period_to from stock_uploads where org_id=$1 order by period_to desc, uploaded_at desc', [orgId]);
+	const ups = await q<any>('select id, locations, period_to::text as period_to from stock_uploads where org_id=$1 and deleted_at is null order by period_to desc, uploaded_at desc', [orgId]);
 	const out: Record<string, { id: number; to: string }> = {};
 	for (const u of ups) for (const l of u.locations) if (!out[l]) out[l] = { id: u.id, to: u.period_to };
 	return out;
@@ -404,7 +436,8 @@ export async function stockContext(orgId: number, text: string, place: Place) {
 	else if (wantsAddress) { fullList = true; addressKeys = DIRECTORY.map((d) => d.key); }
 	else if (books.length && nearKey) addressKeys = [nearKey];
 	addressKeys = [...new Set(addressKeys)];
-	const entries = addressKeys.map((k) => BY_KEY.get(k)!).filter(Boolean);
+	const dir = new Map(resolveDirectory((await getOrg(orgId)).settings).map((d) => [d.key, d]));
+	const entries = addressKeys.map((k) => dir.get(k)!).filter(Boolean);
 	const addrLines = entries.length
 		? [
 			wantsAddress
@@ -412,7 +445,8 @@ export async function stockContext(orgId: number, text: string, place: Place) {
 					? 'The reader asks for Gita Press addresses without naming a place: give the full list below (Hindi lines for a Hindi reply).'
 					: 'The reader asks for an address: give the one(s) below (Hindi lines for a Hindi reply).'
 				: 'Address of the branch nearest the reader, if you suggest buying there:',
-			...entries.map((d) => `- ${entryText(d)}\n  ${entryText(d, true)}`),
+			'The Hindi address is the official one. If the English line ever differs from it, follow the Hindi.',
+			...entries.map((d) => `- ${entryText(d, true)}\n  ${entryText(d)}${d.needs_english_check ? ' (English being checked: write the address from the Hindi line)' : ''}`),
 			...(wantsAddress ? [POST_NOTE] : []),
 		]
 		: [];
