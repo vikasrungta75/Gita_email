@@ -34,7 +34,7 @@ import { dismissDraft, fillDraft, getDraft, getDraftForConversation, listDrafts,
 import { BUSINESS_CATEGORIES, BUSINESS_LABELS, CATEGORIES, CATEGORY_LABELS, PROPOSAL_STAGES, type BusinessCategory } from './ai/types';
 import type { MailboxRow } from './connectors/types';
 import { currentStock, deleteUpload, importStock, restoreUpload, uploadFile, importTitles, inventorySettings, listUploads, saveInventorySettings, stockForConversation, titlesSummary, titlesTemplate } from './stock/stock';
-import { crossSell, customerSuggestions, demand as inventoryDemand, overview as inventoryOverview, rangeGaps, replenishment, slowMovers, stockStatus, topSellers } from './stock/inventory';
+import { bookDetail, bookList, crossSell, customerSuggestions, demand as inventoryDemand, overview as inventoryOverview, rangeGaps, replenishment, slowMovers, stockStatus, topSellers } from './stock/inventory';
 import { BY_KEY, DIRECTORY, HQ_CONTACT, POST_NOTE, POST_NOTE_HI, resolveDirectory, type DirectoryOverride } from './directory';
 import { PURPOSES, PURPOSE_HINTS, PURPOSE_LABELS, normalisePurposes } from './ai/purposes';
 import { writeXlsx } from './xlsx';
@@ -1442,15 +1442,23 @@ const inv = (path: string, fn: (ctx: Ctx) => Promise<any>, sheet?: (res: any) =>
 		return res;
 	});
 const qp = (ctx: Ctx, k: string) => ctx.query.get(k) || undefined;
+const codesParam = (ctx: Ctx) => (ctx.query.get('codes') || '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200);
+inv('/api/inventory/books', async (ctx) => ({ books: await bookList(ctx.user!.orgId) }));
+r.get('/api/inventory/book/:code', async (ctx) => {
+	requireRole(ctx.user, 'analyst');
+	const res = await bookDetail(ctx.user!.orgId, ctx.params.code);
+	if (!res) throw new HttpError(404, 'Book not found');
+	return res;
+});
 inv('/api/inventory/overview', (ctx) => inventoryOverview(ctx.user!.orgId), (res) => ({
 	name: 'Branch summary', header: ['Location', 'Stock as of', 'Copies in stock', 'Stock value (₹)', 'Titles in stock', 'Est. sales per day', 'Days of cover', 'Titles running low', 'Selling titles out of stock'],
 	rows: res.branches.map((b: any) => [b.label, b.asOf, b.qty, b.value, b.titles, b.salesPerDay, b.cover, b.lowTitles, b.outTitles]),
 }));
-inv('/api/inventory/stock', (ctx) => stockStatus(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), status: qp(ctx, 'status'), q: qp(ctx, 'q'), limit: ctx.query.get('format') === 'xlsx' ? 20000 : 500 }), (res) => ({
+inv('/api/inventory/stock', (ctx) => stockStatus(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), status: qp(ctx, 'status'), q: qp(ctx, 'q'), codes: codesParam(ctx), limit: ctx.query.get('format') === 'xlsx' ? 20000 : 500 }), (res) => ({
 	name: `Stock ${res.label}`, header: ['Code', 'Title', 'Hindi title', 'Language', 'In stock', 'Semi-finished', 'Price (₹)', 'Value (₹)', `Sold (last ${res.salesDays} days)`, 'Per month', 'Days of cover', 'Status'],
 	rows: res.rows.map((x: any) => [x.code, x.name, x.hindi, x.language, x.qty, x.semi, x.price, x.value, x.sold, x.perMonth, x.cover, x.status]),
 }));
-inv('/api/inventory/top', (ctx) => topSellers(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), months: intParam(ctx.query.get('months')), limit: ctx.query.get('format') === 'xlsx' ? 1000 : 50 }), (res) => ({
+inv('/api/inventory/top', (ctx) => topSellers(ctx.user!.orgId, { location: qp(ctx, 'location'), language: qp(ctx, 'language'), months: intParam(ctx.query.get('months')), codes: codesParam(ctx), limit: ctx.query.get('format') === 'xlsx' ? 1000 : 50 }), (res) => ({
 	name: 'Top sellers', header: ['Code', 'Title', 'Language', 'Copies sold', 'Sales value (₹)', 'Top branches', 'Gorakhpur stock', 'Price (₹)'],
 	rows: res.rows.map((x: any) => [x.code, x.name, x.language, x.qty, x.value, x.branches.map((b: any) => `${b.label} ${b.qty}`).join('; '), x.hqQty, x.price]),
 }));

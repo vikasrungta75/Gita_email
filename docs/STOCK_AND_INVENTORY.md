@@ -127,6 +127,15 @@ Download the filtered list as **Excel** or **CSV**; both include the reasons. Ea
 * Both numbers can be changed overall or for each branch.
 * Recommendations wait until a location has **at least 28 days** of sales data, because a few days of data would exaggerate one-off sales.
 
+**Finding your way around:**
+
+* **Sort.** Click any column heading to sort; click it again to reverse.
+* **Filter by book.** Stock status, Top sellers, Replenishment, Range, Slow movers and Demand have a **book filter**. Type part of a title, a Hindi title or a code, then press Enter or click a book; add as many books as you like. On Top sellers this compares the chosen books side by side.
+* **One book everywhere.** Click any book title to see that book at every location: stock, semi-finished, price, sales a month, days of cover and its monthly sales.
+* **Status chips.** These filter Stock status in one click: running low, out of stock but selling, overstocked and no sales. Replenishment (by urgency) and Slow movers (transfer suggested, no sales) have the same kind of chips.
+* **Links keep your filters.** The page address keeps the filters, so a filtered view can be bookmarked or sent to a colleague.
+* **Headings stay in view.** Long tables keep their headings visible as you scroll.
+
 Every table can be downloaded as Excel. Access: admins and managers upload; analysts, managers and admins see the section; viewers see stock only in drafts.
 
 ## Notes

@@ -223,7 +223,7 @@ export async function overview(orgId: number) {
 
 // ── stock status ──────────────────────────────────────────────────────────
 
-export async function stockStatus(orgId: number, opts: { location?: string; language?: string; status?: string; q?: string; limit?: number }) {
+export async function stockStatus(orgId: number, opts: { location?: string; language?: string; status?: string; q?: string; codes?: string[]; limit?: number }) {
 	const [f, cur, s] = await Promise.all([facts(orgId), currentStock(orgId), inventorySettings(orgId)]);
 	const loc = opts.location || HQ_KEY;
 	const r = rates(f, loc);
@@ -233,7 +233,9 @@ export async function stockStatus(orgId: number, opts: { location?: string; lang
 	for (const b of cur.books.values()) {
 		const l = b.locs.get(loc);
 		const x = r.byCode.get(b.code);
-		if (!l && !x) continue;
+		// a book picked in the filter is shown even when this location has never had it
+		if (!l && !x && !opts.codes?.includes(b.code)) continue;
+		if (opts.codes?.length && !opts.codes.includes(b.code)) continue;
 		if (opts.language && b.language !== opts.language) continue;
 		if (search && !`${b.code} ${b.name} ${b.hindi || ''}`.toLowerCase().includes(search)) continue;
 		const qty = l?.qty || 0;
@@ -254,7 +256,7 @@ export async function stockStatus(orgId: number, opts: { location?: string; lang
 
 // ── top sellers ────────────────────────────────────────────────────────────
 
-export async function topSellers(orgId: number, opts: { location?: string; language?: string; months?: number; limit?: number }) {
+export async function topSellers(orgId: number, opts: { location?: string; language?: string; months?: number; codes?: string[]; limit?: number }) {
 	const [f, cur] = await Promise.all([facts(orgId), currentStock(orgId)]);
 	const monthsAll = f.months;
 	const use = opts.months ? monthsAll.slice(-opts.months) : monthsAll;
@@ -279,7 +281,7 @@ export async function topSellers(orgId: number, opts: { location?: string; langu
 				hqQty: Math.round(b?.locs.get(HQ_KEY)?.qty || 0), price: b?.locs.get(HQ_KEY)?.price ?? null,
 			};
 		})
-		.filter((r) => !opts.language || r.language === opts.language)
+		.filter((r) => (!opts.language || r.language === opts.language) && (!opts.codes?.length || opts.codes.includes(r.code)))
 		.sort((a, b) => b.qty - a.qty)
 		.slice(0, opts.limit || 50);
 	const languages = new Map<string, number>();
@@ -504,4 +506,31 @@ export async function customerSuggestions(orgId: number, customerId: number) {
 		near && near.key !== HQ_KEY && !BY_KEY.get(near.key)?.no_stock ? `Nearest branch: ${locationLabel(near.key)} (${near.why}).` : '',
 	].filter(Boolean);
 	return { language: lang, nearest: near ? { ...near, label: locationLabel(near.key) } : null, offers, books: [...back, ...books], hasStock: Object.keys(cur.asOf).length > 0 };
+}
+
+/** Every code in the catalogue, for picking books in filters. */
+export async function bookList(orgId: number) {
+	const cur = await currentStock(orgId);
+	return [...cur.books.values()].map((b) => ({ code: b.code, name: b.name, language: b.language, hindi: b.hindi })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One book everywhere: stock, price, sales rate and days of cover at each location, and monthly sales. */
+export async function bookDetail(orgId: number, code: string) {
+	const [f, cur, s] = await Promise.all([facts(orgId), currentStock(orgId), inventorySettings(orgId)]);
+	const b = cur.books.get(code);
+	if (!b) return null;
+	const locs = [HQ_KEY, ...branchKeys()];
+	const rows = locs.map((loc) => {
+		const l = b.locs.get(loc);
+		const r = rates(f, loc).byCode.get(code);
+		const daily = r?.daily || 0;
+		const qty = l?.qty || 0;
+		return {
+			key: loc, label: locationLabel(loc), asOf: cur.asOf[loc] || null, qty: Math.round(qty), semi: Math.round(l?.semi || 0), price: l?.price ?? null,
+			perMonth: Math.round(daily * 30 * 10) / 10, cover: daily ? Math.round(qty / daily) : null, leadDays: settingsFor(s, loc).leadDays,
+		};
+	}).filter((r) => r.asOf);
+	const months = f.months.map((m) => ({ month: m, qty: Math.round(locs.reduce((a, loc) => a + (f.byLoc.get(loc)?.get(m)?.get(code)?.sales || 0), 0)), days: Math.max(0, ...locs.map((l) => f.coverage.get(l)?.get(m) || 0)) }));
+	const requests = await one<any>(`select count(*)::int as n, count(distinct customer_id)::int as people, max(requested_at) as last from book_requests where org_id=$1 and code=$2`, [orgId, code]);
+	return { code, name: b.name, language: b.language, hindi: b.hindi, rows, months, requests };
 }
