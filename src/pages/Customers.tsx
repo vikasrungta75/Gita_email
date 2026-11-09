@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { MdArrowBack, MdEdit, MdSearch, MdTrendingDown, MdTrendingUp } from 'react-icons/md';
+import { useSort } from '../components/SortTable';
 import { api, qs } from '../api/client';
 import { useFilters } from '../contexts/FilterContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,6 +20,7 @@ export default function Customers() {
 	const [kind, setKind] = useState<string>('customer');
 	const { data, isLoading } = useQuery({ queryKey: ['customers', params, q, kind], queryFn: () => api(`/customers${qs({ ...params, q, kind })}`), refetchInterval: 60_000 });
 	const rows = (data?.rows || []).filter((c: any) => state === 'all' || c.health_status === state || (state === 'risk' && ['at_risk', 'dissatisfied'].includes(c.health_status)));
+	const { sorted, Th } = useSort<any>(rows, { key: 'health_score', dir: 'asc' }, { health_status: (c) => ({ dissatisfied: 0, at_risk: 1, neutral: 2, satisfied: 3 } as any)[c.health_status] });
 	const count = (s: string) => (data?.rows || []).filter((c: any) => c.health_status === s).length;
 
 	return (
@@ -56,18 +58,18 @@ export default function Customers() {
 						<table className="table">
 							<thead>
 								<tr>
-									<th>Customer</th>
-									<th style={{ width: 180 }}>Health</th>
-									<th>Status</th>
-									<th>Traffic light mix</th>
-									<th className="num">Conversations</th>
-									<th className="num">Awaiting</th>
+									<Th k="name">Customer</Th>
+									<Th k="health_score" first="asc">Health</Th>
+									<Th k="health_status" first="asc">Status</Th>
+									<Th k="red" num>Traffic light mix</Th>
+									<Th k="conversations" num>Conversations</Th>
+									<Th k="awaiting" num>Awaiting</Th>
 									<th>Top issues</th>
-									<th>Last contact</th>
+									<Th k="last_contact_at">Last contact</Th>
 								</tr>
 							</thead>
 							<tbody>
-								{rows.map((c: any) => (
+								{sorted.map((c: any) => (
 									<tr key={c.id} className="click" onClick={() => nav(`/customers/${c.id}`)}>
 										<td>
 											<div className="row" style={{ fontWeight: 700 }}>{c.name} <TierBadge tier={c.tier} />{kind === 'all' && c.kind && <span className="chip">{KIND_LABELS[c.kind]}</span>}</div>
