@@ -13,7 +13,7 @@ import { fileToBase64, inr, num } from '../lib/purposes';
 
 const TABS = [
 	{ v: 'overview', l: 'Overview' }, { v: 'stock', l: 'Stock status' }, { v: 'top', l: 'Top sellers' }, { v: 'replenish', l: 'Replenishment' },
-	{ v: 'range', l: 'Range per branch' }, { v: 'slow', l: 'Slow movers' }, { v: 'demand', l: 'Demand and cross-sell' }, { v: 'uploads', l: 'Uploads and settings' },
+	{ v: 'range', l: 'Range per branch' }, { v: 'slow', l: 'Slow movers' }, { v: 'demand', l: 'Demand and cross-sell' },{ v: 'uploads', l: 'Settings' },
 ] as const;
 type Tab = (typeof TABS)[number]['v'];
 
@@ -58,10 +58,14 @@ export default function Inventory() {
 	return (
 		<>
 			<PageHead kw="Inventory" rest="and sales"
-				sub="Stock at Gorakhpur and every branch, estimated sales and what to send where, from the Tally stock summaries you upload. Estimated sales are outwards from branch shops and Gorakhpur retail dispatch; Main Stock and branch godown outwards are transfers." />
+				sub="Stock at Gorakhpur and every branch, estimated sales and what to send where, from the Tally stock summaries you upload. Estimated sales are outwards from branch shops and Gorakhpur retail dispatch; Main Stock, branch godowns and the three Delhi godowns are transfers."
+				actions={<Link className="btn" to="/uploads"><MdUploadFile /> Uploads</Link>} />
+			<div className="small mb-16" role="note" style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--amber-soft, #FFF7E6)', border: '1px solid #F5D08A' }}>
+				<span className="badge amber" style={{ marginRight: 8 }}>Estimated</span>{SALES_ESTIMATE_NOTE}.
+			</div>
 			<div className="mb-16" style={{ overflowX: 'auto' }}><Segmented value={tab} onChange={setTab} options={[...TABS]} /></div>
 			{noData && tab !== 'uploads' ? (
-				<Card><Empty text={<>No stock uploaded yet. <Link to="/inventory?tab=uploads">Upload the HQ and branch stock summaries</Link> to begin.</>} /></Card>
+				<Card><Empty text={<>No stock uploaded yet. <Link to="/uploads">Upload the HQ and branch stock summaries</Link> to begin.</>} /></Card>
 			) : (
 				<>
 					{tab === 'overview' && <Overview />}
@@ -71,7 +75,7 @@ export default function Inventory() {
 					{tab === 'range' && <RangeGaps />}
 					{tab === 'slow' && <SlowMovers />}
 					{tab === 'demand' && <Demand />}
-					{tab === 'uploads' && <Uploads />}
+					{tab === 'uploads' && <StockUploads part="settings" />}
 				</>
 			)}
 		</>
@@ -653,12 +657,14 @@ function UploadSlot({ slot, title, help, can }: { slot: 'hq' | 'branch'; title: 
 	);
 }
 
-function Uploads() {
+export const SALES_ESTIMATE_NOTE = 'Estimated from Tally stock movement; Delhi godowns treated as transfers; true sales data not yet available';
+
+/** Stock upload slots and their history (shown on the Uploads page), or the replenishment settings (Inventory → Settings). */
+export function StockUploads({ part }: { part: 'stock' | 'settings' }) {
 	const { can } = useAuth();
 	const toast = useToast();
 	const qc = useQueryClient();
 	const { data, isLoading } = useLocations();
-	const titlesRef = useRef<HTMLInputElement>(null);
 	const [form, setForm] = useState<any>(null);
 	const del = useMutation({ mutationFn: ({ id, permanent }: { id: number; permanent?: boolean }) => api(`/stock/uploads/${id}${permanent ? '?permanent=1' : ''}`, { method: 'DELETE' }), onSuccess: (_r, v) => { qc.invalidateQueries(); toast(v.permanent ? 'Upload erased' : 'Upload removed. It can be restored below.'); }, onError: (e: any) => toast(e.message, 'error') });
 	const restore = useMutation({ mutationFn: (id: number) => api(`/stock/uploads/${id}/restore`, { body: {} }), onSuccess: () => { qc.invalidateQueries(); toast('Upload restored'); }, onError: (e: any) => toast(e.message, 'error') });
@@ -670,11 +676,6 @@ function Uploads() {
 		a.download = u.file_name || 'stock.xlsx';
 		a.click();
 	};
-	const titles = useMutation({
-		mutationFn: async (f: File) => api('/stock/titles', { body: { fileName: f.name, data: await fileToBase64(f) } }),
-		onSuccess: (r) => { qc.invalidateQueries(); toast(`Hindi titles saved: ${r.updated + r.added} codes${r.skipped ? `, ${r.skipped} rows skipped` : ''}`); if (titlesRef.current) titlesRef.current.value = ''; },
-		onError: (e: any) => toast(e.message, 'error'),
-	});
 	const save = useMutation({ mutationFn: () => api('/stock/settings', { method: 'PUT', body: { ...form, nonSalesGodowns: String(form.nonSalesGodowns || '').split('\n').map((x: string) => x.trim()).filter(Boolean) } }), onSuccess: () => { qc.invalidateQueries(); toast('Settings saved'); setForm(null); }, onError: (e: any) => toast(e.message, 'error') });
 	if (isLoading || !data) return <Loader />;
 	const s = data.settings;
@@ -682,28 +683,15 @@ function Uploads() {
 	const removed = data.uploads.filter((u: any) => u.deleted_at);
 	const f = form || { coverDays: s.coverDays, leadDays: s.leadDays, branches: s.branches, nonSalesGodowns: (s.nonSalesGodowns || []).join('\n') };
 	const manager = can('manager');
-	const template = async () => {
-		const res = await fetch('/api/stock/titles/template', { headers: { authorization: `Bearer ${getToken()}` } });
-		const a = document.createElement('a');
-		a.href = URL.createObjectURL(await res.blob());
-		a.download = 'gitamail-hindi-titles.xlsx';
-		a.click();
-	};
 	return (
 		<>
-			<div className="grid g-2 mb-16">
-				<UploadSlot slot="hq" can={manager} title="Head office (Gorakhpur) stock" help="The Tally Stock Summary with the MAIN STOCK, RETAIL STOCK and SEMI FINISHED sheets. Main + Retail are offered to readers; semi-finished is shown to staff only." />
-				<UploadSlot slot="branch" can={manager} title="Branch stock" help="The Tally Stock Summary with one sheet per branch. A branch missing from a file keeps its last uploaded stock." />
-			</div>
-			<div className="grid g-2 mb-16">
-				<Card title="Hindi book titles" sub="Optional. Tally names are in English letters; with the Hindi titles, emails written in Devanagari match books more reliably. Hindi names are already matched by sound without this list.">
-					<div className="small mb-8">{num(data.titles?.with_hindi)} of {num(data.titles?.codes)} codes have a Hindi title{data.titles?.hindi_updated ? `, last updated ${ago(data.titles.hindi_updated)}` : ''}.</div>
-					<div className="row wrap gap-8">
-						<button className="btn" onClick={template}><MdDownload /> Download list to fill in</button>
-						{manager && <><input ref={titlesRef} type="file" accept=".xlsx,.csv" hidden onChange={(e) => e.target.files?.[0] && titles.mutate(e.target.files[0])} />
-							<button className="btn primary" disabled={titles.isPending} onClick={() => titlesRef.current?.click()}><MdUploadFile /> {titles.isPending ? 'Uploading…' : 'Upload Hindi titles'}</button></>}
-					</div>
-					<div className="xs faint mt-8">Columns: Code, English name, Hindi title, Other names (separate with ;). The download already lists every code and English name.</div>
+			{part === 'stock' && <div className="grid g-2 mb-16">
+				<UploadSlot slot="hq" can={manager} title="Head office (Gorakhpur) stock · weekly" help="The Tally Stock Summary with the MAIN STOCK, RETAIL STOCK and SEMI FINISHED sheets. Main + Retail are offered to readers; semi-finished is shown to staff only." />
+				<UploadSlot slot="branch" can={manager} title="Branch stock · weekly" help="The Tally Stock Summary with one sheet per branch. A branch missing from a file keeps its last uploaded stock. A godown of another branch listed on a sheet is ignored." />
+			</div>}
+			{part === 'settings' && <div className="grid g-2 mb-16">
+				<Card title="Uploads and book list" sub="Stock, orders and Kalyan files are uploaded on the Uploads page. Hindi titles, links and prices are kept in the book list.">
+					<div className="row wrap gap-8"><Link className="btn primary" to="/uploads"><MdUploadFile /> Uploads</Link><Link className="btn" to="/admin/settings?tab=master&sub=books">Book list</Link></div>
 				</Card>
 				<Card title="Replenishment settings" sub="Used for Running low, Replenishment, Range and Slow movers.">
 					<div className="grid g-2">
@@ -728,8 +716,9 @@ function Uploads() {
 						<span className="hint">Their outwards are not counted as sales. Godowns with "Godown" in the name are always treated this way.</span></div>
 					{manager && form && <button className="btn primary mt-8" disabled={save.isPending} onClick={() => save.mutate()}>Save settings</button>}
 				</Card>
-			</div>
-			<UploadTable title={`Uploads in use (${active.length})`} sub="Every upload is kept for trends. The latest period for each location is its current stock. The original Excel files are stored and can be downloaded."
+			</div>}
+			{part === 'settings' ? null : <>
+			<UploadTable title={`Stock uploads in use (${active.length})`} sub="Every upload is kept for trends. The latest period for each location is its current stock. The original Excel files are stored and can be downloaded."
 				rows={active} actions={(u) => <>
 					{u.has_file && <button className="btn ghost icon sm" title="Download the original file" aria-label="Download the original file" onClick={() => fileOf(u)}><MdDownload /></button>}
 					{manager && <button className="btn ghost icon sm" title="Remove (can be restored)" aria-label="Remove upload" onClick={() => confirm('Remove this upload? Its stock and sales are taken out of the figures. You can restore it later.') && del.mutate({ id: u.id })}><MdDelete /></button>}
@@ -744,6 +733,7 @@ function Uploads() {
 					</>} />
 				</details>
 			)}
+			</>}
 		</>
 	);
 }

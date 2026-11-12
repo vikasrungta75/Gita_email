@@ -111,22 +111,61 @@ export function purposesFromSubgroup(group: string, sub: string | null | undefin
 	return FROM_SUBGROUP[`${group}:${sub}`] || FROM_SUBGROUP[`${group}:*`] || [];
 }
 
-/** Rules engine: purposes from what the reader wrote, plus the group and subgroup. */
-export function guessPurposes(text: string, group: string, sub?: string | null, opts: { abroad?: boolean } = {}): Purpose[] {
+// ── the list in use ─────────────────────────────────────────────────────────
+// The reasons can be edited in Settings → Reasons for contacting (server/ai/purposeDefs.ts keeps them in the
+// database and loads them here). The list above is the seed for a new organisation and the fallback.
+
+export interface ActivePurpose { key: string; label: string; description: string; keywords: string[]; hidden: boolean; merged_into: string | null; group_name?: string; sort_order?: number }
+const STATIC: ActivePurpose[] = PURPOSES.map((k) => ({ key: k, label: PURPOSE_LABELS[k], description: PURPOSE_HINTS[k], keywords: [], hidden: false, merged_into: null }));
+let ACTIVE: ActivePurpose[] = STATIC;
+let BY_KEY = new Map(ACTIVE.map((d) => [d.key, d]));
+let MATCHERS: { key: string; test: (text: string, lower: string) => boolean }[] = [];
+
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** A keyword added in Settings: whole words for English (any case), anywhere in the text for Hindi. */
+export function keywordTest(keyword: string): (text: string, lower: string) => boolean {
+	const k = keyword.trim();
+	if (!k) return () => false;
+	if (/[\u0900-\u097F]/.test(k)) return (text) => text.includes(k);
+	const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(k.toLowerCase()).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'u');
+	return (_t, lower) => re.test(lower);
+}
+
+export function setActivePurposes(defs: ActivePurpose[] | null) {
+	ACTIVE = defs && defs.length ? defs : STATIC;
+	BY_KEY = new Map(ACTIVE.map((d) => [d.key, d]));
+	MATCHERS = ACTIVE.filter((d) => !d.hidden && !d.merged_into && d.keywords?.length).map((d) => { const tests = d.keywords.map(keywordTest); return { key: d.key, test: (t: string, l: string) => tests.some((f) => f(t, l)) }; });
+}
+export const allPurposes = () => ACTIVE;
+/** Keys the AI and staff can choose: not hidden, not merged away. */
+export const activePurposeKeys = () => ACTIVE.filter((d) => !d.hidden && !d.merged_into).map((d) => d.key);
+export const purposeLabel = (k: string) => BY_KEY.get(k)?.label || (PURPOSE_LABELS as Record<string, string>)[k] || k;
+/** The key a reason stands for today: follows a merge; null when it is unknown or hidden. */
+export function resolvePurpose(k: string): string | null {
+	let d = BY_KEY.get(k);
+	for (let i = 0; d && d.merged_into && i < 6; i++) d = BY_KEY.get(d.merged_into);
+	return d && !d.hidden && !d.merged_into ? d.key : null;
+}
+
+/** Rules engine: purposes from what the reader wrote, plus the group and subgroup, plus keywords added in Settings. */
+export function guessPurposes(text: string, group: string, sub?: string | null, opts: { abroad?: boolean } = {}): string[] {
 	if ((NO_PURPOSE_GROUPS as string[]).includes(group)) return [];
-	const found = new Set<Purpose>(purposesFromSubgroup(group, sub));
+	const found = new Set<string>(purposesFromSubgroup(group, sub));
 	for (const [p, re] of RULES) if (re.test(text)) found.add(p);
+	const lower = text.toLowerCase();
+	for (const m of MATCHERS) if (m.test(text, lower)) found.add(m.key);
 	if (opts.abroad) found.add('international');
 	// "order" words in a tracking question are about the existing order, not a new one
 	if (found.has('order_tracking') && found.has('book_order') && !/\b(also|new order|another order|additional)\b|और (पुस्तकें|किताबें)/i.test(text)) found.delete('book_order');
-	if (!found.size) found.add('other');
-	return normalisePurposes([...found]);
+	const out = normalisePurposes([...found]);
+	return out.length ? out : normalisePurposes(['other']);
 }
 
-export function normalisePurposes(v: unknown): Purpose[] {
-	const list = (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim().toLowerCase()).filter((x): x is Purpose => (PURPOSES as readonly string[]).includes(x));
+/** Keeps only reasons in use: unknown and hidden ones are dropped, merged ones become what they were merged into. */
+export function normalisePurposes(v: unknown): string[] {
+	const list = (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => resolvePurpose(String(x).trim().toLowerCase())).filter((x): x is string => !!x);
 	const out = [...new Set(list)];
 	return out.length > 1 ? out.filter((x) => x !== 'other') : out;
 }
 
-export const purposesForPrompt = () => PURPOSES.map((p) => `${p} (${PURPOSE_HINTS[p]})`).join('; ');
+export const purposesForPrompt = () => ACTIVE.filter((d) => !d.hidden && !d.merged_into).map((d) => `${d.key} (${d.description})`).join('; ');

@@ -1,4 +1,4 @@
-import { PURPOSES } from './purposes';
+import { PURPOSES, activePurposeKeys } from './purposes';
 export const CATEGORIES = [
 	'service_failure',
 	'delay',
@@ -259,3 +259,11 @@ export const ANALYSIS_SCHEMA = {
 		'rag_reason', 'legal_or_churn_signal',
 	],
 } as const;
+
+/** The schema for one analysis call: the reasons for contacting offered to the AI are the ones in use now (Settings → Reasons for contacting). */
+export function analysisSchema() {
+	const keys = activePurposeKeys();
+	const props: any = { ...ANALYSIS_SCHEMA.properties };
+	props.purposes = { ...props.purposes, items: { type: 'string', enum: keys.length ? keys : [...PURPOSES] } };
+	return { ...ANALYSIS_SCHEMA, properties: props };
+}

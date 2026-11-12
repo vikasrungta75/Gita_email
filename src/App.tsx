@@ -26,6 +26,7 @@ import Profile from './pages/Profile';
 import Help from './pages/Help';
 import CategoryReport from './pages/CategoryReport';
 import Inventory from './pages/Inventory';
+import Uploads from './pages/Uploads';
 import { Loader } from './components/ui';
 
 function Protected({ children, min }: { children: ReactNode; min?: 'viewer' | 'analyst' | 'manager' | 'admin' }) {
@@ -76,7 +77,8 @@ export default function App() {
 				<Route path="/admin/mailboxes" element={<SettingsRedirect tab="mailboxes" />} />
 				<Route path="/admin/users" element={<SettingsRedirect tab="users" />} />
 				<Route path="/admin/settings" element={<Protected min="analyst"><Settings /></Protected>} />
-				<Route path="/admin/addresses" element={<SettingsRedirect tab="addresses" />} />
+				<Route path="/admin/addresses" element={<SettingsRedirect tab="master" sub="addresses" />} />
+				<Route path="/uploads" element={<Protected min="analyst"><Uploads /></Protected>} />
 				<Route path="/admin/customers" element={<Protected min="analyst"><CustomerDb /></Protected>} />
 				<Route path="/inventory" element={<Protected min="analyst"><Inventory /></Protected>} />
 				<Route path="/admin/processing" element={<SettingsRedirect tab="status" />} />

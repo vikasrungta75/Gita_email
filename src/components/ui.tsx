@@ -237,7 +237,7 @@ export function Segmented<T extends string>({ value, options, onChange }: { valu
 export function MultiSelect({
 	label, options, value, onChange, searchable, icon, keepLabel,
 }: {
-	label: string; options: { v: string | number; l: string; extra?: ReactNode }[]; value: (string | number)[]; onChange: (v: any[]) => void;
+	label: string; options: { v: string | number; l: string; extra?: ReactNode; group?: string }[]; value: (string | number)[]; onChange: (v: any[]) => void;
 	searchable?: boolean; icon?: ReactNode;
 	/** show "Label: choice" instead of the choice alone */
 	keepLabel?: boolean;
@@ -263,8 +263,10 @@ export function MultiSelect({
 				<div className="ms-pop">
 					{searchable && <input className="input" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />}
 					<div className="ms-list">
-						{shown.map((o) => (
-							<label key={o.v} className="ms-opt">
+						{shown.map((o, i) => (
+							<div key={o.v}>
+							{o.group && o.group !== shown[i - 1]?.group && <div className="xs faint" style={{ padding: '6px 8px 2px', fontWeight: 600 }}>{o.group}</div>}
+							<label className="ms-opt">
 								<input
 									type="checkbox"
 									checked={value.includes(o.v)}
@@ -273,6 +275,7 @@ export function MultiSelect({
 								<span className="grow truncate">{o.l}</span>
 								{o.extra}
 							</label>
+							</div>
 						))}
 						{!shown.length && <div className="faint small" style={{ padding: 8 }}>No matches</div>}
 					</div>

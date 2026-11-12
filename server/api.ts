@@ -36,7 +36,12 @@ import type { MailboxRow } from './connectors/types';
 import { currentStock, deleteUpload, importStock, restoreUpload, uploadFile, importTitles, inventorySettings, listUploads, saveInventorySettings, stockForConversation, titlesSummary, titlesTemplate } from './stock/stock';
 import { bookDetail, bookList, crossSell, customerSuggestions, demand as inventoryDemand, overview as inventoryOverview, rangeGaps, replenishment, slowMovers, stockStatus, topSellers } from './stock/inventory';
 import { BY_KEY, DIRECTORY, HQ_CONTACT, POST_NOTE, POST_NOTE_HI, resolveDirectory, type DirectoryOverride } from './directory';
-import { PURPOSES, PURPOSE_HINTS, PURPOSE_LABELS, normalisePurposes } from './ai/purposes';
+import { normalisePurposes, purposeLabel } from './ai/purposes';
+import { getPurposeDefs } from './ai/purposeDefs';
+import { computeTiers, moveCustomerData, refreshStats } from './customers/link';
+import { registerStage1 } from './routes/stage1';
+import { printPage } from './print';
+import { runUploads } from './worker';
 import { writeXlsx } from './xlsx';
 
 const r = new Router();
@@ -599,6 +604,13 @@ r.get('/api/customers/:id', async (ctx) => {
 		  group by 1 order by 1`,
 		[id],
 	);
+	// phone numbers and postal addresses are for analysts and above; viewers see names only
+	if (ctx.user!.role === 'viewer') {
+		const strip = (p: any) => { if (!p || typeof p !== 'object') return p; const { phones, address, pin, subscriber_numbers, order_refs, gstin, ...rest } = p; void phones; void address; void pin; void subscriber_numbers; void order_refs; void gstin; return rest; };
+		for (const k of ['profile', 'profile_manual', 'upload_profile']) cu[k] = strip(cu[k]);
+		cu.kalyan_custnos = [];
+		if (cu.enrichment) cu.enrichment = { ...cu.enrichment, possible_duplicates: [] };
+	}
 	return { customer: cu, conversations: convs, health: health.reverse(), contacts, issues, actions, sentiment };
 });
 
@@ -632,11 +644,14 @@ r.post('/api/customers/merge', async (ctx) => {
 		if (!src) continue;
 		for (const table of ['conversations', 'contacts', 'issues', 'action_items', 'alerts'])
 			await q(`update ${table} set customer_id=$1 where customer_id=$2`, [target, s]);
+		await moveCustomerData(target, s);
 		await q(`update customers set domains = (select array(select distinct unnest(domains || $2::text[]))) where id=$1`, [target, src.domains]);
 		await q('delete from customers where id=$1', [s]);
 	}
 	await updateCustomerHealth(target);
 	await refreshCustomerPurposes(target);
+	await refreshStats(ctx.user!.orgId);
+	await computeTiers(ctx.user!.orgId);
 	await audit(ctx, 'customer.merged', 'customer', target, { sources });
 	return { success: true };
 });
@@ -968,6 +983,17 @@ r.del('/api/mailboxes/:id', async (ctx) => {
 	await audit(ctx, 'mailbox.removed', 'mailbox', id, { purge });
 	return { success: true };
 });
+
+/** Start working through uploads in the background (hosted: the background function; otherwise in this process). */
+async function kickUploads() {
+	const base = process.env.URL;
+	const secret = process.env.INTERNAL_API_SECRET;
+	if (base && secret && process.env.NETLIFY) {
+		await fetch(`${base}/.netlify/functions/worker-background`, { method: 'POST', headers: { 'x-remail-secret': secret, 'content-type': 'application/json' }, body: JSON.stringify({ uploads: true }) }).catch((e) => console.error('[kick]', e.message));
+		return;
+	}
+	runUploads(10 * 60_000).catch((e) => console.error('[uploads]', e.message));
+}
 
 async function kickWorker(mailboxId?: number) {
 	// On Netlify, hand off to the background function (15 min budget); locally run inline.
@@ -1485,7 +1511,8 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 	if (!res) throw new HttpError(404, 'Customer not found');
 	return res;
 });
-r.get('/api/purposes', async () => ({ purposes: PURPOSES.map((k) => ({ key: k, label: PURPOSE_LABELS[k], hint: PURPOSE_HINTS[k] })) }));
+// /api/purposes and the Stage 1 routes (uploads, master data, customers, reasons) live in server/routes/stage1.ts
+registerStage1(r, { kickUploads });
 
 
 // ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──
@@ -1546,13 +1573,19 @@ r.get('/api/customer-db', async (ctx) => {
 	requireRole(ctx.user, 'analyst');
 	const res = await listCustomerDb(ctx.user!.orgId, ctx.query);
 	const format = ctx.query.get('format');
-	if (format !== 'csv' && format !== 'xlsx') return res;
-	const cols = ['name', 'type', 'organisation', 'emails', 'phones', 'address', 'city', 'state', 'pin', 'country', 'language', 'purposes', 'order_refs', 'subscriber_numbers', 'books', 'gstin', 'threads', 'waiting', 'first_contact', 'last_contact_at', 'notes'];
-	const heads = ['Name', 'Type', 'Organisation', 'Emails', 'Phones', 'Address', 'City', 'State', 'PIN', 'Country', 'Language', 'Reasons for contacting', 'Order numbers', 'Kalyan subscriber numbers', 'Books asked about', 'GSTIN', 'Threads', 'Waiting', 'First contact', 'Last contact', 'Notes'];
-	const val = (r: any, c: string) => (c === 'purposes' ? (r.purposes || []).map((x: string) => (PURPOSE_LABELS as any)[x] || x) : c === 'country' ? r.country : c in r.p ? (r.p as any)[c] : r[c]);
+	if (format !== 'csv' && format !== 'xlsx' && format !== 'print') return res;
+	const cols = ['name', 'type', 'organisation', 'emails', 'phones', 'address', 'city', 'state', 'pin', 'country', 'language', 'purposes', 'order_refs', 'subscriber_numbers', 'books', 'gstin', 'threads', 'waiting', 'first_contact', 'last_contact_at', 'notes', 'tier', 'orders_count', 'orders_spend', 'orders_12m', 'spend_12m', 'orders_last', 'last_order_status', 'kalyan', 'kalyan_type', 'kalyan_last', 'kalyan_renewal', 'data_gaps'];
+	const heads = ['Name', 'Type', 'Organisation', 'Emails', 'Phones', 'Address', 'City', 'State', 'PIN', 'Country', 'Language', 'Reasons for contacting', 'Order numbers', 'Kalyan subscriber numbers', 'Books asked about', 'GSTIN', 'Threads', 'Waiting', 'First contact', 'Last contact', 'Notes', 'Tier', 'Orders', 'Total spend (₹)', 'Orders in last 12 months', 'Spend in last 12 months (₹)', 'Last order', 'Last order status', 'Kalyan buyer', 'Kalyan subscription', 'Latest Kalyan dispatch', 'Kalyan renewal (estimated)', 'Gaps'];
+	const SUB: Record<string, string> = { '1Y': '1 year', FY: '5 years', LM: 'Life member' };
+	const extra: Record<string, (r: any) => unknown> = {
+		tier: (r) => ({ platinum: 'Platinum', gold: 'Gold', silver: 'Silver', regular: 'Regular' } as any)[r.buyer_tier] || '', kalyan: (r) => (r.kalyan_buyer ? 'Yes' : 'No'), kalyan_type: (r) => SUB[r.kalyan_type] || r.kalyan_type || '',
+		kalyan_renewal: (r) => (!r.kalyan_buyer ? '' : r.kalyan_type === 'LM' ? 'Life member' : r.kalyan_renewal || 'Not known'),
+	};
+	const val = (r: any, c: string) => (extra[c] ? extra[c](r) : c === 'purposes' ? (r.purposes || []).map((x: string) => purposeLabel(x)) : c === 'country' ? r.country : c in r.p ? (r.p as any)[c] : r[c]);
 	const flat = (v: any) => (Array.isArray(v) ? v.join('; ') : v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : v);
 	await audit(ctx, 'export.customer_db', 'customer', null, { rows: res.rows.length, format });
 	const stamp = new Date().toISOString().slice(0, 10);
+	if (format === 'print') return printPage('Customer database', heads, res.rows.map((r: any) => cols.map((c) => flat(val(r, c)))));
 	if (format === 'xlsx') return xlsxResponse(writeXlsx([{ name: 'Customers', header: heads, rows: res.rows.map((r: any) => cols.map((c) => flat(val(r, c)))) }]), `gitamail-customers-${stamp}.xlsx`);
 	const cell = (v: any) => { const s = String(flat(v)); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 	const lines = [heads.join(','), ...res.rows.map((r: any) => cols.map((c) => cell(val(r, c))).join(','))];
@@ -1679,7 +1712,7 @@ export async function handle(req: Request): Promise<Response> {
 	};
 	try {
 		await ensureSchema();
-		await defaultOrgId();
+		await getPurposeDefs(await defaultOrgId());
 		await loadServiceAccount();
 		if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
 			const text = await req.text();

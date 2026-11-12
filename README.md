@@ -6,6 +6,14 @@ Gita Mail reads the Gita Press mailboxes (each person's own inbox, plus shared o
 
 ## Features
 
+**Uploads, master data and the customer database**
+* One Uploads page for stock (weekly), orders (twice a week), Kalyan dispatch (monthly), the book list and the price list, with a five-year history and the original files.
+* Large Kalyan files (750,000 rows) are read in the browser and sent in parts, then worked through in the background.
+* Book list (Settings → Master data): one row per book code, with Hindi titles, links, title families and gaps.
+* One customer per person across email, orders and Kalyan; Platinum, Gold and Silver tiers; important-buyer alerts.
+* Reasons for contacting can be edited in Settings.
+* See [docs/STOCK_AND_INVENTORY.md](docs/STOCK_AND_INVENTORY.md).
+
 **Gmail and Google Workspace**
 * Sign in with Google; the person's own inbox connects automatically.
 * Shared mailboxes through Workspace domain-wide delegation, limited to the addresses an admin adds.

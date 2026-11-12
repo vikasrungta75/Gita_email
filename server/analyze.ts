@@ -1,3 +1,4 @@
+import { getPurposeDefs } from './ai/purposeDefs';
 import { upsertDraft } from './drafts';
 import { one, q } from './db';
 import { aiPaused, analyseThread } from './ai/llm';
@@ -18,6 +19,7 @@ import { evaluateConversationAlerts, evaluateHealthAlert } from './alerts';
 const MAX_MESSAGES = 14;
 
 export async function analysePending(orgId: number, limit = 25, deadline = Date.now() + 60_000) {
+	await getPurposeDefs(orgId);
 	// new and changed threads first; threads that fell back to the rules engine are retried only while the AI is available
 	const retryFallbacks = !(await aiPaused());
 	const rows = await q<{ id: number }>(
@@ -377,6 +379,7 @@ export async function refreshCustomerPurposes(customerId: number) {
 
 /** Threads analysed before purposes existed get them from the rules engine in the background (no AI cost). */
 export async function backfillPurposes(orgId: number, limit = 400) {
+	await getPurposeDefs(orgId);
 	const rows = await q<any>(
 		`select c.id, c.customer_id, c.business_category, c.subcategory, c.is_internal, c.is_automated, c.subject,
 		   (select string_agg(left(coalesce(e.body_clean, e.body_text, ''), 1500), ' ') from (select * from emails e where e.conversation_id=c.id and e.direction='inbound' and not e.is_duplicate order by e.sent_at desc limit 3) e) as body

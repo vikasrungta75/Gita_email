@@ -5,7 +5,7 @@ import { MdArrowBack, MdAutoAwesome, MdContentCopy, MdRefresh, MdOpenInNew, MdCh
 import { downloadIcs } from './MyDay';
 import DraftEditor from '../components/DraftEditor';
 import StockPanel from '../components/StockPanel';
-import { PURPOSE_KEYS, purposeLabel, shortPurpose } from '../lib/purposes';
+import { purposeLabel, shortPurpose, usePurposes } from '../lib/purposes';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -18,6 +18,7 @@ export default function ConversationDetail() {
 	const { id } = useParams();
 	const nav = useNavigate();
 	const { groups, subLabel } = useTaxonomy();
+	usePurposes();
 	const { can } = useAuth();
 	const toast = useToast();
 	const qc = useQueryClient();
@@ -188,7 +189,7 @@ export default function ConversationDetail() {
 								<span>
 									{editPurposes ? (
 										<>
-											<Chips options={PURPOSE_KEYS.map((k) => ({ v: k, l: shortPurpose(k) }))} value={editPurposes} onChange={setEditPurposes} />
+											<PurposeChips value={editPurposes} onChange={setEditPurposes} />
 											<div className="row gap-4 mt-8">
 												<button className="btn sm primary" onClick={() => { update.mutate({ purposes: editPurposes }); setEditPurposes(null); }}>Save</button>
 												<button className="btn sm ghost" onClick={() => setEditPurposes(null)}>Cancel</button>
@@ -263,5 +264,24 @@ export default function ConversationDetail() {
 				</div>
 			</div>
 		</>
+	);
+}
+
+/** The reasons in use, under their group headings (Settings → Reasons for contacting). */
+function PurposeChips({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+	const { active, groups } = usePurposes();
+	return (
+		<div className="col gap-8">
+			{groups.map((g) => {
+				const list = active.filter((d) => !g || d.group_name === g);
+				if (!list.length) return null;
+				return (
+					<div key={g || 'all'}>
+						{g && <div className="xs faint mb-4">{g}</div>}
+						<Chips options={list.map((d) => ({ v: d.key, l: shortPurpose(d.key) }))} value={value} onChange={onChange} />
+					</div>
+				);
+			})}
+		</div>
 	);
 }

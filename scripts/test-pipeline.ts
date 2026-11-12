@@ -278,7 +278,7 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	// inventory: two months of data, sales from retail and shops only
 	const ov = await inventory.overview(orgId);
 	assert.deepEqual(ov.months.map((m: any) => m.month), ['2026-09', '2026-10']);
-	assert.equal(ov.months[1].qty, 300 + 20 + 25 + 90 + 1, 'October sales: HQ retail + Delhi shop + Bhilwara + Patna (Main Stock and Delhi godown are transfers)');
+	assert.equal(ov.months[1].qty, 300 + 20 + 90 + 1, 'October sales: HQ retail + Bhilwara + Patna (Main Stock and every Delhi godown are transfers, as decided in November 2026)');
 	const top = await inventory.topSellers(orgId, {});
 	assert.equal(top.rows[0].code, '1638');
 	const rep2 = await inventory.replenishment(orgId, {});
@@ -314,6 +314,262 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	const names = byCountry.rows.map((r: any) => r.name.toLowerCase());
 	assert.deepEqual(names, [...names].sort().reverse(), 'sorted by name, descending');
 	assert.ok(Array.isArray(byCountry.totals.countries));
+}
+
+// ── Stage 1: book list, orders, Kalyan, customer links, tiers, upload history, editable reasons ──
+{
+	const orgId = await defaultOrgId();
+	const { writeXlsx } = await import('../server/xlsx');
+	const { streamTableRows } = await import('../src/lib/xlsxStream');
+	const books = await import('../server/master/books');
+	const batches = await import('../server/uploads/batches');
+	const { runAnalytics } = await import('../server/analytics');
+	const { listCustomerDb } = await import('../server/profiles');
+	const { importStock } = await import('../server/stock/stock');
+	const link = await import('../server/customers/link');
+
+	// sends a generated file through the same path as the browser: read in batches, then rows, then finish
+	const send = async (kind: 'orders' | 'kalyan', data: Uint8Array, name: string) => {
+		let id = 0, n = 0;
+		await streamTableRows(data, name, async (rows) => {
+			if (!id) id = (await batches.startBatch(orgId, null, { kind, fileName: name, fileSize: data.length, header: rows.shift() })).id;
+			if (rows.length) { await batches.addRows(orgId, id, { start: n, rows }); n += rows.length; }
+		}, { batch: 2 });
+		await batches.addFilePart(orgId, id, 0, data);
+		await batches.finishBatch(orgId, id, { rows: n });
+		await batches.processBatches(orgId, Date.now() + 120_000);
+		return one<any>('select * from upload_batches where id=$1', [id]);
+	};
+	const csv = (rows: unknown[][]) => new TextEncoder().encode(rows.map((r) => r.map((c) => (/[",\n]/.test(String(c)) ? `"${String(c).replace(/"/g, '""')}"` : c)).join(',')).join('\n'));
+
+	// ── book list ──
+	const BH = ['Code', 'English name', 'Language', 'Hindi title', 'Other names (separate with ;)', 'gitapress.org Website Link', 'Amazon Website Link'];
+	const bookFile = writeXlsx([{ name: 'Books', header: BH, rows: [
+		[1, 'Gita-Tattva-Vivechani', 'Hindi', 'गीता-तत्त्व-विवेचनी - ( 1 )', '', 'gitapress.org/book/1', 'https://www.amazon.in/dp/B001'],
+		['1.0', '', 'Hindi', '', '', '', 'https://www.amazon.in/dp/B001'],
+		[457, 'Gita Tattva Vivechani', 'English', '', 'Tattva Vivechani', 'https://www.gitapress.org/book/457', '#N/A'],
+		[639, 'Shri Narayaniyam', 'Sanskrit', 'श्री नारायणीयम्-639', '', '#N/A', '#N/A'],
+		['CB035', 'Bal Kahaniyan', 'Hindi', 'बाल कहानियाँ', '', 'https://example.com/x', 'https://www.amazon.in/dp/B035'],
+		[1638, 'Hanuman Chalisa', 'English', 'हनुमानचालीसा (अंग्रेजी)', '', 'https://www.gitapress.org/book/1638', 'https://www.amazon.in/dp/B1638'],
+	] }]);
+	const parsed = await books.parseBookFile(orgId, 'books.xlsx', bookFile);
+	assert.equal(parsed.rows.length, 5, '1 and 1.0 are the same book');
+	assert.ok(parsed.problems.some((p) => /more than once/.test(p)));
+	const prev = await books.previewBooks(orgId, parsed.rows);
+	assert.ok(prev.hasStock && prev.notInFile > 0, 'codes in Tally but not in the file are counted');
+	const applied = await books.applyBooks(orgId, null, 'books.xlsx', bookFile);
+	assert.ok(applied.batchId > 0);
+	const b639 = await one<any>(`select * from book_titles where code='639'`);
+	assert.equal(b639.hindi_title, 'श्री नारायणीयम्', 'code stripped from the Hindi title');
+	assert.equal(b639.hindi_raw, 'श्री नारायणीयम्-639', 'original text kept');
+	assert.equal(b639.gitapress_url, null, '#N/A stored as empty');
+	assert.ok(b639.flags.includes('no_gitapress_link') && b639.flags.includes('no_amazon_link'));
+	assert.equal((await one<any>(`select hindi_title from book_titles where code='1'`)).hindi_title, 'गीता-तत्त्व-विवेचनी');
+	assert.equal((await one<any>(`select gitapress_url from book_titles where code='1'`)).gitapress_url, 'https://gitapress.org/book/1', 'link without https:// accepted');
+	assert.ok((await one<any>(`select flags from book_titles where code='CB035'`)).flags.includes('bad_gitapress_link'), 'a gitapress.org link must be on gitapress.org');
+	const fam = await q<any>(`select code, family from book_titles where code in ('1','457')`);
+	assert.equal(fam[0].family, fam[1].family, 'Hindi and English editions are one title family');
+	await books.saveBook(orgId, null, { code: '457', family: 'Tattva Vivechani (English)' });
+	await books.applyBooks(orgId, null, 'books.xlsx', bookFile);
+	assert.equal((await one<any>(`select family from book_titles where code='457'`)).family, 'Tattva Vivechani (English)', 'a family set by hand is never overwritten');
+	await assert.rejects(books.saveBook(orgId, null, { code: '1638', amazon_url: 'https://flipkart.com/x' }), /amazon\.in or amazon\.com/);
+	await books.setBookRemoved(orgId, null, 'CB035', true);
+	assert.equal((await books.listBooks(orgId, new URLSearchParams({ q: 'CB035' }))).rows.length, 0, 'a removed book is hidden');
+	assert.equal((await books.listBooks(orgId, new URLSearchParams({ status: 'removed' }))).rows.length, 1, '...and listed under Removed');
+	await books.setBookRemoved(orgId, null, 'CB035', false);
+	// a new code in a Tally file is added as "Needs details"; a godown of another branch is ignored
+	const GROUPS2 = ['', '', '', '', '', '', '', 'Opening Balance', '', '', 'Inwards', '', '', 'Outwards', '', '', 'Closing Balance', '', ''];
+	const HEAD2 = ['Sl No', 'Code', 'Product Name', 'GodownName', 'BatchName', 'Category', 'Unit', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value', 'Qty', 'Rate', 'Value'];
+	const row2 = (i: number, code: string, name: string, godown: string) => [String(i), code, name, godown, `${code}_Rs.50`, 'Hindi', 'Nos', 10, 50, 500, '', '', '', 2, 50, 100, 8, 50, 400];
+	const kol = await importStock(orgId, null, 'branch', 'kolkata.xlsx', writeXlsx([{ name: 'KOLKATA', header: ['Gita Press - Kolkata'], rows: [['Road'], ['Gita Stock Summary'], ['1-Nov-26 to 7-Nov-26'], GROUPS2, HEAD2,
+		row2(1, '99901', 'New Book Not In List', 'Kolkata Branch Location'), row2(2, '1638', 'Hanuman Chalisa', 'Bangalore Branch Location'), row2(3, '1638', 'Hanuman Chalisa', 'Rishikesh Branch Location'), ['Total']] }]));
+	assert.ok(kol.warnings.some((w: string) => /2 rows were ignored because the godown belongs to another location/.test(w)), 'godowns of other locations are ignored');
+	assert.equal((await one<any>(`select count(*)::int n from stock_rows where upload_id=$1`, [kol.upload.id])).n, 1);
+	assert.equal((await one<any>(`select status from book_titles where code='99901'`)).status, 'needs_details', 'new stock code flagged');
+
+	// ── orders ──
+	const OH = ['orderId', 'orderMongoId', 'siteCategory', 'customerName', 'email', 'phone', 'totalAmount', 'subTotal', 'postage', 'paymentMethod', 'orderStatusCode', 'orderStatusLabel', 'paymentStatus', 'createdAt', 'trackingId', 'deliveryPartner', 'shipFirstName', 'shipLastName', 'shipAddress1', 'shipAddress2', 'shipCity', 'shipPincode', 'shipMobile'];
+	const ord = (id: string, name: string, email: string, phone: string, amt: number, date: string, track: string, partner: string, status = 'Shipped', pin = '273005') =>
+		[id, `m${id}`, 'Gorakhpur', name, email, phone, amt, amt - 50, 50, id.includes('_') ? 'ONLINE' : 'Imported', status === 'Shipped' ? 4 : 2, status, 4, date, track, partner, name, '', 'Street 1', '', 'Gorakhpur', pin, phone];
+	const o1 = [OH,
+		ord('GPHO_9001', 'Asha Devi', 'asha@example.com', '9876500001', 2500, '2026-10-12T10:00:00Z', 'RU123456789IN', 'India Post'),
+		ord('GPHO_9001', 'Asha Devi', 'asha@example.com', '9876500001', 2500, '2026-10-12T10:00:00Z', 'RU123456789IN', 'India Post'),
+		ord('GPHO9001', 'Mohan Lal', '', '9876500002', 300, '2026-10-11T18:30:00Z', '5.0E+12', 'www.delhivery.in'),
+		ord('GPHO_9002', 'Asha Devi', '', '+91 98765 00001', 1200, '2026-10-20T10:00:00Z', '', 'Trackon', 'Processing'),
+		ord('GPHO_9003', 'Kiran', 'kiran@bad', '9876500003', 99, '2026-10-21T10:00:00Z', 'TRK1234567', 'Blue Courier'),
+	];
+	const ob = await send('orders', csv(o1), 'orders.csv');
+	assert.equal(ob.status, 'done', ob.error);
+	assert.equal(ob.rows_total, 4, 'exact copies counted once; GPHO9001 and GPHO_9001 are two different orders');
+	assert.equal(ob.profile.damagedTracking, 1);
+	assert.ok(ob.warnings.some((w: string) => /5\.0E\+12/.test(w)));
+	assert.ok(Object.keys(ob.profile.unknownCouriers).includes('Blue Courier'));
+	assert.equal(ob.profile.couriers.Delhivery, 1, 'courier names merged');
+	const dmg = await one<any>(`select tracking_id, tracking_ok from orders where order_key='GPHO9001'`);
+	assert.ok(!dmg.tracking_ok, 'damaged tracking number never used');
+	assert.equal((await one<any>(`select email, email_ok from orders where order_key='GPHO_9003'`)).email_ok, false, 'a cut-short email is not used');
+	// the next file has all orders to date: a status change updates the order and is added to its history
+	const o2 = [OH, ...o1.slice(1).filter((r) => r[0] !== 'GPHO_9002'), ord('GPHO_9002', 'Asha Devi', '', '9876500001', 1200, '2026-10-20T10:00:00Z', 'EK998877665', 'Ekart', 'Shipped')];
+	const ob2 = await send('orders', csv(o2), 'orders2.csv');
+	assert.equal(ob2.rows_updated, 1);
+	assert.equal(ob2.rows_new, 0);
+	assert.equal((await one<any>(`select status_label, partner from orders where order_key='GPHO_9002'`)).status_label, 'Shipped');
+	assert.equal((await one<any>(`select count(*)::int n from order_status_history where order_key='GPHO_9002'`)).n, 2, 'status history kept');
+
+	// ── Kalyan ──
+	const KH = ['subperiod', 'custno', 'NAME', 'ADDRESS', 'city', 'pin', 'state', 'PhoneNo', 'DispMode', 'sbarcodeno', 'dispdate', 'Fromissue', 'Toissue', 'EmailID', 'Returnsts'];
+	const xd = (iso: string) => Math.round(Date.parse(`${iso}T00:00:00Z`) / 86400_000) + 25569;
+	const kRows: unknown[][] = [KH];
+	for (const [m, d] of [[5, '2026-05-10'], [6, '2026-06-10'], [7, '2026-07-10'], [8, '2026-08-10']] as const) {
+		kRows.push(['1Y', 101, 'SRI ASHA DEVI', 'Street 1', 'GORAKHPUR', 273005, 'UTTAR PRADESH', 9876500001, m === 8 ? 'REGISTERED' : 'ORDINARY', m === 8 ? 'RA108IN' : '', xd(d), m, m, '', '']);
+		kRows.push(['LM', 102, 'SRI RAM', 'Road 2', 'PUNE', 411001, 'MAHARASTRA', 9876500009, 'REGISTERED', `RM10${m}IN`, xd(d), m, m, 'ram@example', 'ACCEPT']);
+		if (m !== 8) for (let k = 0; k < 6; k++) kRows.push(['1Y', 200 + k, `READER ${k}`, 'x', 'PATNA', 800001, 'BIHAR', '', 'ORDINARY', '', xd(d), m, m, '', '']);
+	}
+	kRows.push(['fy', 103, 'SMT SITA', 'Lane 3', 'DELHI', 110006, 'NEW DELHI', 9876500003, 'REGISTERED', 'RM999IN', xd('2026-07-15'), 1, 7, 'sita@example.com', '']);
+	kRows.push(['1Y', 101, 'SRI ASHA DEVI', 'Street 1', 'GORAKHPUR', 273005, 'UTTAR PRADESH', 9876500001, 'ORDINARY', '', xd('2026-05-10'), 5, 5, '', '']);
+	const kFile = writeXlsx([{ name: 'Sheet1', header: KH, rows: kRows.slice(1) }]);
+	const kb = await send('kalyan', kFile, 'kalyan.xlsx');
+	assert.equal(kb.status, 'done', kb.error);
+	assert.equal(kb.rows_total, kRows.length - 1, 'every dispatch row kept, including two rows with the same key');
+	assert.equal(kb.profile.sameKeyRows, 1);
+	assert.ok(kb.warnings.some((w: string) => /August 2026: no ordinary-post dispatches/.test(w)), 'a month with no ordinary post is flagged');
+	assert.ok(kb.warnings.some((w: string) => /cut short or not valid/.test(w)));
+	const again = await send('kalyan', kFile, 'kalyan-again.xlsx');
+	assert.equal(again.rows_new, 0, 'loading the same file again adds nothing');
+	assert.equal((await one<any>(`select count(*)::int n from kalyan_dispatches`)).n, kRows.length - 1);
+	const s101 = await one<any>(`select *, renewal_est::text as renewal_est from kalyan_subscribers where custno='101'`);
+	assert.equal(s101.sub_type, '1Y');
+	assert.equal(String(s101.renewal_est).slice(0, 10), '2027-01-01', '1-year subscription: renewal in January of the next year');
+	assert.equal((await one<any>(`select renewal_est::text as renewal_est from kalyan_subscribers where custno='103'`)).renewal_est, '2031-01-01', '5-year subscriber who started this year (catch-up from issue 1)');
+	assert.equal((await one<any>(`select renewal_est from kalyan_subscribers where custno='102'`)).renewal_est, null, 'life member: never');
+	assert.equal((await one<any>(`select state_norm from kalyan_subscribers where custno='102'`)).state_norm, 'Maharashtra');
+
+	// ── one customer per person ──
+	await q(`insert into contacts (org_id, customer_id, email, name) select $1, id, 'asha@example.com', 'Asha' from customers where org_id=$1 order by id limit 1 on conflict do nothing`, [orgId]);
+	const emailCustomer = (await one<any>(`select customer_id from contacts where email='asha@example.com'`)).customer_id;
+	await runAnalytics(orgId, 'test');
+	assert.equal((await one<any>(`select customer_id from orders where order_key='GPHO_9001'`)).customer_id, emailCustomer, 'order linked by email to the customer who wrote');
+	assert.equal((await one<any>(`select customer_id from orders where order_key='GPHO_9002'`)).customer_id, emailCustomer, 'order with no email linked by mobile');
+	assert.equal((await one<any>(`select customer_id from kalyan_subscribers where custno='101'`)).customer_id, emailCustomer, 'Kalyan subscriber linked by mobile');
+	const asha = await one<any>(`select * from customers where id=$1`, [emailCustomer]);
+	assert.ok(asha.kalyan_buyer && asha.orders_count === 2 && Number(asha.orders_spend) === 3700);
+	assert.ok(asha.matched_by.includes('email') && asha.matched_by.includes('phone'), 'how each link was made is recorded');
+	assert.notEqual((await one<any>(`select customer_id from orders where order_key='GPHO9001'`)).customer_id, emailCustomer, 'a different person is not merged');
+	// same name and PIN code: a suggestion, never a merge
+	const twinA = await one<any>(`select customer_id from kalyan_subscribers where custno='200'`);
+	await q(`insert into kalyan_subscribers (org_id, custno, name, city, pin, state, sub_type, dispatches) values ($1, '999', 'READER 0', 'PATNA', '800001', 'BIHAR', '1Y', 1)`, [orgId]);
+	await q(`insert into kalyan_dispatches (org_id, custno, from_issue, to_issue, dispdate, mode) values ($1, '999', 8, 8, '2026-08-10', 'ORDINARY')`, [orgId]);
+	await runAnalytics(orgId, 'test');
+	const twinB = await one<any>(`select customer_id from kalyan_subscribers where custno='999'`);
+	assert.notEqual(twinA.customer_id, twinB.customer_id);
+	assert.ok(await one(`select 1 from customer_reviews where kind='name_pin' and customer_a=least($1::bigint,$2::bigint) and customer_b=greatest($1::bigint,$2::bigint)`, [twinA.customer_id, twinB.customer_id]), 'same name and PIN listed for staff');
+	// tiers, filters, sorting and the record's history
+	const tiers = await link.computeTiers(orgId);
+	assert.ok(tiers.ranked > 0);
+	assert.equal((await one<any>(`select buyer_tier from customers where id=$1`, [emailCustomer])).buyer_tier, 'platinum', 'the biggest buyer is Platinum');
+	const plat = await listCustomerDb(orgId, new URLSearchParams({ tier: 'platinum' }));
+	assert.ok(plat.rows.every((r: any) => r.buyer_tier === 'platinum') && plat.rows.some((r: any) => r.id === emailCustomer));
+	assert.ok((await listCustomerDb(orgId, new URLSearchParams({ kalyan: 'yes', orders: 'yes' }))).rows.some((r: any) => r.id === emailCustomer));
+	const bySpend = (await listCustomerDb(orgId, new URLSearchParams({ sort: 'spend' }))).rows.map((r: any) => r.orders_spend);
+	assert.deepEqual(bySpend, [...bySpend].sort((x, y) => y - x), 'sorted by spend');
+	assert.ok((await listCustomerDb(orgId, new URLSearchParams({ q: '101' }))).rows.some((r: any) => r.id === emailCustomer), 'search by Kalyan subscriber number');
+	const hist = await link.customerHistory(orgId, emailCustomer);
+	assert.equal(hist.orders.length, 2);
+	assert.ok(hist.dispatches.length >= 4);
+	// split: move the Kalyan subscription to a new customer
+	const sp = await link.splitCustomer(orgId, emailCustomer, { custnos: ['101'], name: 'Asha Devi (Kalyan)' });
+	assert.equal((await one<any>(`select customer_id from kalyan_subscribers where custno='101'`)).customer_id, sp.id);
+	assert.equal((await one<any>(`select kalyan_buyer from customers where id=$1`, [emailCustomer])).kalyan_buyer, false);
+	// important buyers: alert when they go quiet
+	await q(`update orders set ordered_at = now() - interval '120 days' where customer_id=$1`, [emailCustomer]);
+	await link.refreshStats(orgId);
+	await link.computeTiers(orgId);
+	assert.ok((await link.raiseBuyerAlerts(orgId)).buyersQuiet >= 1);
+	assert.equal((await link.raiseBuyerAlerts(orgId)).buyersQuiet, 0, 'raised once');
+	// replies to send: Platinum and Gold first
+	const { listDrafts } = await import('../server/drafts');
+	assert.ok(Array.isArray(await listDrafts('d.org_id=$1', [orgId], 'draft')));
+
+	// ── history: kept, removable, original downloadable; the retention job never touches it ──
+	const hist2 = await batches.uploadHistory(orgId, new URLSearchParams());
+	for (const k of ['orders', 'kalyan', 'books', 'hq', 'branch']) assert.ok(hist2.some((h: any) => h.kind === k), `${k} in the one history`);
+	assert.ok((await batches.batchFile(orgId, ob.id))!.bytes.length > 100, 'original file stored');
+	const before = (await one<any>(`select count(*)::int n from orders`)).n;
+	await q(`update organisations set settings = settings || '{"retentionDays":30}'::jsonb where id=$1`, [orgId]);
+	(await import('../server/settings')).invalidateOrg(orgId);
+	await (await import('../server/worker')).purgeExpired(orgId);
+	assert.equal((await one<any>(`select count(*)::int n from orders`)).n, before, 'retention does not delete uploaded data');
+	assert.equal((await one<any>(`select count(*)::int n from upload_batches where deleted_at is null`)).n >= 5, true);
+	const extra = await send('orders', csv([OH, ord('GPHO_9100', 'New Person', 'new@example.com', '9876500100', 50, '2026-11-01T10:00:00Z', '', 'India Post')]), 'one-more.csv');
+	const rm = await batches.removeBatch(orgId, extra.id, null);
+	assert.equal(rm.rowsTakenOut, 1, 'removing takes out only the rows this upload brought in');
+	assert.ok(await one(`select 1 from orders where order_key='GPHO_9001'`), 'older orders stay');
+	await assert.rejects(batches.removeBatch(orgId, ob.id, null, true), /Remove it first/);
+	await batches.removeBatch(orgId, extra.id, null, true);
+	assert.equal(await one(`select 1 from upload_batches where id=$1`, [extra.id]), null, 'erased permanently');
+	await assert.rejects(batches.startBatch(orgId, null, { kind: 'orders', header: KH }), /Kalyan dispatch file/, 'a Kalyan file in the Orders slot is refused');
+	await assert.rejects(batches.startBatch(orgId, null, { kind: 'orders', header: OH.slice(2) }), /missing.*orderId/);
+}
+
+// ── Appendix A: editable reasons for contacting ──
+{
+	const orgId = await defaultOrgId();
+	const defs = await import('../server/ai/purposeDefs');
+	const P = await import('../server/ai/purposes');
+	const { analysisSchema } = await import('../server/ai/types');
+	const { requireRole } = await import('../server/auth');
+	const { listCustomerDb } = await import('../server/profiles');
+	const { crossSell } = await import('../server/stock/inventory');
+	const seeded = await defs.getPurposeDefs(orgId);
+	assert.deepEqual(seeded.map((d) => d.key).sort(), [...P.PURPOSES].sort(), 'seeded from the 22 reasons');
+	assert.ok(seeded.every((d) => d.label === (P.PURPOSE_LABELS as any)[d.key]));
+	assert.deepEqual(seeded.filter((d) => d.locked).map((d) => d.key).sort(), ['international', 'kalyan', 'other']);
+	// a new reason with keywords reaches the rules engine and the AI choices
+	await defs.savePurposes(orgId, null, { reasons: [{ label: 'Audio books', description: 'Asks for audio recordings of books.', group_name: 'Service and engagement', keywords: 'audio book, ऑडियो' }] });
+	assert.ok(P.activePurposeKeys().includes('audio_books'));
+	assert.ok((analysisSchema() as any).properties.purposes.items.enum.includes('audio_books'));
+	assert.ok(P.guessPurposes('Do you have an Audio Book of the Gita?', 'customer_service').includes('audio_books'));
+	assert.ok(P.guessPurposes('क्या गीता का ऑडियो उपलब्ध है', 'customer_service').includes('audio_books'), 'Hindi keyword');
+	assert.ok(!P.guessPurposes('My audiobookstore order', 'customer_service').includes('audio_books'), 'whole words only');
+	// free re-tag: an older thread with the keyword gets the reason; a thread set by hand is left alone
+	const cust = await one<any>(`select id from customers where org_id=$1 order by id limit 1`, [orgId]);
+	const mk = async (locked: boolean) => {
+		const c = await one<any>(`insert into conversations (org_id, customer_id, subject, analysed_at, purposes, purposes_locked, business_category) values ($1,$2,'Audio book please', now(), '{other}', $3, 'customer_service') returning id`, [orgId, cust.id, locked]);
+		const mb = await one<any>(`select id from mailboxes where org_id=$1 order by id limit 1`, [orgId]);
+		await q(`insert into emails (org_id, mailbox_id, conversation_id, direction, from_address, subject, body_text, body_clean, sent_at, provider_message_id, dedup_key, content_hash)
+		         values ($1,$2,$3,'inbound','a@b.com','Audio','I want the audio book','I want the audio book', now(), $4, $4, $4)`, [orgId, mb.id, c.id, `m-audio-${locked}`]);
+		return c.id;
+	};
+	const free = await mk(false).catch((e) => { throw new Error(`could not create a test thread: ${e.message}`); });
+	const held = await mk(true);
+	await defs.savePurposes(orgId, null, { reasons: [{ key: 'audio_books', keywords: 'audio book, audiobook, ऑडियो' }] });
+	await defs.retagTick(orgId);
+	assert.deepEqual((await one<any>(`select purposes from conversations where id=$1`, [free])).purposes, ['audio_books'], 'keyword re-tag adds the reason and drops "other"');
+	assert.deepEqual((await one<any>(`select purposes from conversations where id=$1`, [held])).purposes, ['other'], 'threads set by hand are skipped');
+	assert.ok((await one<any>(`select purposes from customers where id=$1`, [cust.id])).purposes.includes('audio_books'), 'customer refreshed');
+	assert.ok((await listCustomerDb(orgId, new URLSearchParams({ purposes: 'audio_books' }))).rows.some((r: any) => r.id === cust.id), 'filter by a new reason');
+	// rename keeps the key; hide removes it from the AI but not from old records
+	await defs.savePurposes(orgId, null, { reasons: [{ key: 'audio_books', label: 'Audio and video' }] });
+	assert.equal(P.purposeLabel('audio_books'), 'Audio and video');
+	await defs.savePurposes(orgId, null, { reasons: [{ key: 'audio_books', hidden: true }] });
+	assert.ok(!P.activePurposeKeys().includes('audio_books'));
+	assert.ok(!(analysisSchema() as any).properties.purposes.items.enum.includes('audio_books'));
+	assert.ok((await one<any>(`select purposes from conversations where id=$1`, [free])).purposes.includes('audio_books'), 'kept on old records');
+	await assert.rejects(defs.savePurposes(orgId, null, { reasons: [{ key: 'kalyan', hidden: true }] }), /cannot be hidden/);
+	await assert.rejects(defs.savePurposes(orgId, null, { reasons: [{ key: 'job', label: 'Kalyan' }] }), /same name/);
+	await assert.rejects(defs.savePurposes(orgId, null, { reasons: [{ label: 'No description', description: '' }] }), /needs a description/);
+	// merge: tags move without duplicates; a locked reason cannot be merged away
+	await q(`update customers set purposes = '{book_order,availability_price}' where id=$1`, [cust.id]);
+	const m = await defs.mergePurpose(orgId, null, 'availability_price', 'book_order');
+	assert.ok(m.customers >= 1);
+	assert.deepEqual((await one<any>(`select purposes from customers where id=$1`, [cust.id])).purposes, ['book_order'], 'no duplicate after a merge');
+	assert.deepEqual(P.normalisePurposes(['availability_price']), ['book_order'], 'old key follows the merge');
+	await assert.rejects(defs.mergePurpose(orgId, null, 'kalyan', 'other'), /cannot be merged away/);
+	await assert.rejects(defs.mergePurpose(orgId, null, 'job', 'audio_books'), /hidden or merged/);
+	const cs = await crossSell(orgId);
+	assert.ok(cs.segments.every((s: any) => !s.has.includes('availability_price') && !s.not.includes('availability_price')), 'cross-sell groups follow the merge');
+	// only managers and above may change the list
+	assert.throws(() => requireRole({ id: 1, orgId, role: 'analyst' } as any, 'manager'), (e: any) => e.status === 403);
 }
 console.log('All pipeline tests passed');
 await getPool().end();

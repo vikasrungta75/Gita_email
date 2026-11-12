@@ -114,7 +114,7 @@ async function aiProfile(orgId: number, name: string, texts: string[]): Promise<
 
 /** Rules first, then the AI's reading on top where it found something. */
 export async function buildProfile(customerId: number, useAi: boolean) {
-	const c = await one<any>('select id, org_id, name from customers where id=$1', [customerId]);
+	const c = await one<any>('select id, org_id, name, upload_profile from customers where id=$1', [customerId]);
 	if (!c) throw new HttpError(404, 'Customer not found');
 	const emails = await q<any>(
 		`select e.body_clean, e.body_text, e.subject, e.from_address from emails e join conversations cv on cv.id=e.conversation_id
@@ -148,6 +148,14 @@ export async function buildProfile(customerId: number, useAi: boolean) {
 			console.error('[profiles] AI failed, rules only:', e.message);
 		}
 	}
+	// what the order and Kalyan uploads know about this person fills anything the emails did not say
+	const up: any = c.upload_profile || {};
+	for (const [k, v] of Object.entries(up)) {
+		const cur = (profile as any)[k];
+		if (Array.isArray(v)) (profile as any)[k] = uniq([...(Array.isArray(cur) ? cur : []), ...v.map(String)], 12);
+		else if (v && !cur) (profile as any)[k] = v;
+	}
+	if (!texts.length && Object.keys(up).length) source = 'upload';
 	await q('update customers set profile=$2, profile_source=$3, profile_at=now() where id=$1', [customerId, JSON.stringify(profile), source]);
 	return { profile, source };
 }
@@ -156,7 +164,8 @@ export async function buildProfile(customerId: number, useAi: boolean) {
 export async function buildProfiles(orgId: number, deadline: number) {
 	const rows = await q<any>(
 		`select id, (last_contact_at > now() - interval '30 days') as recent from customers
-		  where org_id=$1 and (profile_at is null or last_contact_at > profile_at) order by last_contact_at desc nulls last limit 300`,
+		  where org_id=$1 and (profile_at is null or last_contact_at > profile_at)
+		    and exists (select 1 from conversations cv where cv.customer_id=customers.id) order by last_contact_at desc nulls last limit 300`,
 		[orgId],
 	);
 	let n = 0;
@@ -175,11 +184,35 @@ export const merged = (c: any): Profile => ({ ...(c.profile || {}), ...(c.profil
 
 export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	const params: unknown[] = [orgId];
-	const where = ['c.org_id=$1', `exists (select 1 from conversations cv where cv.customer_id=c.id)`];
+	// everyone who has written, ordered or takes Kalyan
+	const where = ['c.org_id=$1', `(c.orders_count > 0 or c.kalyan_buyer or exists (select 1 from conversations cv where cv.customer_id=c.id))`];
 	const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
 	const P = `(c.profile || c.profile_manual)`;
 	const text = (qs.get('q') || '').trim();
-	if (text) { const t = p(`%${text}%`); where.push(`(c.name ilike ${t} or ${P}::text ilike ${t} or exists (select 1 from contacts k where k.customer_id=c.id and k.email ilike ${t}))`); }
+	if (text) {
+		const t = p(`%${text}%`);
+		const digits = text.replace(/\D/g, '');
+		const exact = p(text.toUpperCase().replace(/\s+/g, ''));
+		where.push(`(c.name ilike ${t} or ${P}::text ilike ${t} or exists (select 1 from contacts k where k.customer_id=c.id and k.email ilike ${t})
+			or ${exact} = any(c.kalyan_custnos) or exists (select 1 from orders o where o.org_id=c.org_id and o.customer_id=c.id and o.order_key = ${exact})
+			${digits.length >= 10 ? `or exists (select 1 from customer_phones ph where ph.customer_id=c.id and ph.phone10 = ${p(digits.slice(-10))})` : ''})`);
+	}
+	// tier, Kalyan and orders (from the uploads)
+	const tiers = (qs.get('tier') || '').split(',').map((x) => x.trim()).filter(Boolean);
+	if (tiers.length) where.push(`c.buyer_tier = any(${p(tiers)}::text[])`);
+	if (qs.get('kalyan') === 'yes') where.push('c.kalyan_buyer');
+	if (qs.get('kalyan') === 'no') where.push('not c.kalyan_buyer');
+	if (qs.get('kalyanType')) where.push(`c.kalyan_type = ${p(qs.get('kalyanType'))}`);
+	if (qs.get('orders') === 'yes') where.push('c.orders_count > 0');
+	if (qs.get('orders') === 'no') where.push('c.orders_count = 0');
+	if (Number(qs.get('minSpend')) > 0) where.push(`c.orders_spend >= ${p(Number(qs.get('minSpend')))}`);
+	if (Number(qs.get('minOrders')) > 0) where.push(`c.orders_count >= ${p(Number(qs.get('minOrders')))}`);
+	if (qs.get('orderedSince')) where.push(`c.orders_last >= ${p(qs.get('orderedSince'))}::date`);
+	if (qs.get('orderedBefore')) where.push(`c.orders_last < ${p(qs.get('orderedBefore'))}::date`);
+	// important buyers who have not ordered for a while
+	if (Number(qs.get('quietDays')) > 0) where.push(`c.buyer_tier in ('platinum','gold') and c.orders_count > 0 and c.orders_last < now() - make_interval(days => ${p(Math.round(Number(qs.get('quietDays'))))})`);
+	if (qs.get('gap')) where.push(`${p(qs.get('gap'))} = any(c.data_gaps)`);
+	if (qs.get('source') === 'email') where.push('exists (select 1 from conversations cv where cv.customer_id=c.id)');
 	if (qs.get('type')) where.push(`coalesce(${P}->>'type', c.kind) = ${p(qs.get('type'))}`);
 	if (qs.get('language')) where.push(`${P}->>'language' = ${p(qs.get('language'))}`);
 	if (qs.get('state')) where.push(`${P}->>'state' ilike ${p(qs.get('state'))}`);
@@ -202,14 +235,19 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 	const SORTS: Record<string, [string, 'asc' | 'desc']> = {
 		recent: ['c.last_contact_at', 'desc'], name: ['lower(c.name)', 'asc'], type: [`coalesce(${P}->>'type', c.kind)`, 'asc'], place: [`lower(nullif(${P}->>'city',''))`, 'asc'],
 		country: [COUNTRY, 'asc'], language: [`nullif(${P}->>'language','')`, 'asc'], threads: ['threads', 'desc'], reasons: ['cardinality(c.purposes)', 'desc'],
+		tier: [`case c.buyer_tier when 'platinum' then 1 when 'gold' then 2 when 'silver' then 3 else 4 end`, 'asc'], points: ['c.buyer_points', 'desc'], spend: ['c.orders_spend', 'desc'],
+		orders: ['c.orders_count', 'desc'], lastOrder: ['c.orders_last', 'desc'], kalyan: [`case c.kalyan_type when 'LM' then 1 when 'FY' then 2 when '1Y' then 3 else 4 end`, 'asc'],
 	};
 	const [col, def] = SORTS[qs.get('sort') || 'recent'] || SORTS.recent;
 	const sort = `${col} ${dir || def} nulls last, c.id`;
-	const limit = Math.min(Number(qs.get('limit')) || 50, ['csv', 'xlsx'].includes(qs.get('format') || '') ? 20000 : 200);
+	const exporting = ['csv', 'xlsx', 'print'].includes(qs.get('format') || '');
+	const limit = exporting ? (qs.get('format') === 'print' ? 5000 : 300000) : Math.min(Number(qs.get('limit')) || 50, 200);
 	const offset = Math.max(0, Number(qs.get('offset')) || 0);
 	const W = where.join(' and ');
 	const rows = await q<any>(
-		`select c.id, c.name, c.kind, c.tier, c.purposes, ${COUNTRY} as country, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
+		`select c.id, c.name, c.kind, c.tier, c.purposes, c.buyer_tier, c.buyer_points::float as buyer_points, c.buyer_why, c.orders_count, c.orders_spend::float as orders_spend, c.orders_first, c.orders_last,
+		        c.orders_12m, c.spend_12m::float as spend_12m, c.payment_methods, c.last_order_status, c.kalyan_buyer, c.kalyan_custnos, c.kalyan_type, c.kalyan_first::text, c.kalyan_last::text, c.kalyan_mode,
+		        c.kalyan_renewal::text, c.kalyan_start_known, c.data_gaps, c.matched_by, c.from_uploads, ${COUNTRY} as country, c.health_score, c.health_status, c.last_contact_at, c.profile, c.profile_manual, c.profile_source, c.profile_at, c.enrichment, c.enriched_at,
 		        (select count(*) from conversations cv where cv.customer_id=c.id)::int as threads,
 		        (select count(*) from conversations cv where cv.customer_id=c.id and cv.awaiting_reply and cv.status in ('open','in_progress'))::int as waiting,
 		        (select min(cv.first_message_at) from conversations cv where cv.customer_id=c.id) as first_contact
@@ -223,7 +261,10 @@ export async function listCustomerDb(orgId: number, qs: URLSearchParams) {
 		        count(*) filter (where jsonb_array_length(coalesce(${P}->'order_refs','[]')) > 0)::int as with_orders,
 		        count(*) filter (where jsonb_array_length(coalesce(${P}->'subscriber_numbers','[]')) > 0)::int as with_subscriber,
 		        count(*) filter (where c.profile_source='ai')::int as by_ai,
-		        count(*) filter (where c.profile_at is null)::int as pending
+		        count(*) filter (where c.kalyan_buyer)::int as kalyan, count(*) filter (where c.orders_count > 0)::int as with_uploaded_orders, coalesce(sum(c.orders_spend), 0)::float as spend,
+		        count(*) filter (where c.buyer_tier='platinum')::int as platinum, count(*) filter (where c.buyer_tier='gold')::int as gold, count(*) filter (where c.buyer_tier='silver')::int as silver,
+		        count(*) filter (where c.kalyan_buyer and c.orders_count > 0)::int as kalyan_and_orders,
+		        count(*) filter (where c.profile_at is null and not c.from_uploads)::int as pending
 		   from customers c
 		  where ${W}`,
 		params,

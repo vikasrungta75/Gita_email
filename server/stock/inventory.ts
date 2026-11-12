@@ -9,6 +9,7 @@ import { one, q } from '../db';
 import { BY_KEY, DIRECTORY, HQ_KEY, locationLabel, nearestBranch } from '../directory';
 import { currentStock, inventorySettings, type InventorySettings } from './stock';
 import { PURPOSE_LABELS, type Purpose } from '../ai/purposes';
+import { purposeLabel, resolvePurpose } from '../ai/purposes';
 
 const SALES_KINDS = ['retail', 'store'];
 /** Recommendations need at least about a month of sales; a few days of data would exaggerate one-off sales. */
@@ -444,7 +445,7 @@ export async function demand(orgId: number) {
 	return { unmet, backInStock: backInStock.slice(0, 500) };
 }
 
-const SEGMENTS: { id: string; label: string; pitch: string; has: Purpose[]; not?: Purpose[] }[] = [
+const SEGMENTS: { id: string; label: string; pitch: string; has: string[]; not?: string[] }[] = [
 	{ id: 'kalyan_no_books', label: 'Kalyan readers who never ordered books', pitch: 'Offer popular books in their language and the Kalyan special-issue titles.', has: ['kalyan'], not: ['book_order', 'availability_price', 'bulk_order'] },
 	{ id: 'books_no_kalyan', label: 'Book buyers who do not take Kalyan', pitch: 'Offer a Kalyan (or Kalyana-Kalpataru) subscription.', has: ['book_order'], not: ['kalyan'] },
 	{ id: 'enquired_not_ordered', label: 'Asked about availability or price but never ordered', pitch: 'Follow up with stock and the nearest branch.', has: ['availability_price'], not: ['book_order', 'bulk_order'] },
@@ -457,18 +458,22 @@ const SEGMENTS: { id: string; label: string; pitch: string; has: Purpose[]; not?
 export async function crossSell(orgId: number) {
 	const segs = [];
 	for (const s of SEGMENTS) {
+		// a merged reason is followed to what it was merged into; a group that needs a hidden reason is left out
+		const has = s.has.map((p) => resolvePurpose(p));
+		if (has.some((p) => !p)) continue;
+		const not = (s.not || []).map((p) => resolvePurpose(p)).filter(Boolean) as string[];
 		const r = await one<any>(
 			`select count(*)::int as n from customers c where c.org_id=$1 and c.purposes @> $2::text[] and not (c.purposes && $3::text[])`,
-			[orgId, s.has, s.not || []],
+			[orgId, has, not],
 		);
-		segs.push({ ...s, n: r?.n || 0, hasLabels: s.has.map((p) => PURPOSE_LABELS[p]), notLabels: (s.not || []).map((p) => PURPOSE_LABELS[p]) });
+		segs.push({ ...s, has, not, n: r?.n || 0, hasLabels: (has as string[]).map(purposeLabel), notLabels: not.map(purposeLabel) });
 	}
 	const purposeCounts = await q<any>(`select p as purpose, count(*)::int as n from customers c, unnest(c.purposes) p where c.org_id=$1 group by 1 order by 2 desc`, [orgId]);
 	const back = await one<any>(
 		`select count(distinct br.customer_id)::int as n from book_requests br where br.org_id=$1 and br.hq_qty = 0 and br.customer_id is not null and br.requested_at > now() - interval '365 days'`,
 		[orgId],
 	);
-	return { segments: segs, purposes: purposeCounts.map((p) => ({ ...p, label: (PURPOSE_LABELS as any)[p.purpose] || p.purpose })), askedWhenOut: back?.n || 0 };
+	return { segments: segs, purposes: purposeCounts.map((p) => ({ ...p, label: purposeLabel(p.purpose) })), askedWhenOut: back?.n || 0 };
 }
 
 /** Books and offers for one customer, from their purposes, language, place and the books they asked about. */

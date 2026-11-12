@@ -1,7 +1,7 @@
 import type { IconType } from 'react-icons';
 import {
 	MdAutoAwesome, MdDashboard, MdNotificationsActive, MdBusiness, MdForum, MdChecklist,
-	MdInsights, MdAssessment, MdInbox, MdGroup, MdSettings, MdHistory, MdToday, MdDrafts, MdRequestQuote, MdGroups, MdHelpOutline, MdSync, MdContacts, MdInventory2,
+	MdInsights, MdAssessment, MdInbox, MdGroup, MdSettings, MdHistory, MdToday, MdDrafts, MdRequestQuote,MdGroups, MdHelpOutline, MdSync, MdContacts, MdInventory2, MdUploadFile,
 } from 'react-icons/md';
 
 export interface MenuItem {
@@ -47,6 +47,7 @@ export const menu: { section: string; items: MenuItem[] }[] = [
 		section: 'Inventory',
 		items: [
 			{ id: 'inventory', text: 'Stock and sales', path: '/inventory', icon: MdInventory2, minRole: 'analyst' },
+			{ id: 'uploads', text: 'Uploads', path: '/uploads', icon: MdUploadFile, minRole: 'analyst' },
 		],
 	},
 	{

@@ -6,7 +6,8 @@ import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { Card, Loader, Modal, PageHead, Segmented, Switch } from '../../components/ui';
-import Addresses from './Addresses';
+import MasterData from './MasterData';
+import Reasons from './Reasons';
 import Mailboxes from './Mailboxes';
 import Users from './Users';
 import Processing from './Processing';
@@ -69,7 +70,8 @@ type Role = 'viewer' | 'analyst' | 'manager' | 'admin';
 const TABS: { v: string; l: string; min: Role }[] = [
 	{ v: 'general', l: 'General', min: 'manager' },
 	{ v: 'replies', l: 'Reply drafts', min: 'manager' },
-	{ v: 'addresses', l: 'Addresses', min: 'analyst' },
+	{ v: 'master', l: 'Master data', min: 'analyst' },
+	{ v: 'reasons', l: 'Reasons for contacting', min: 'manager' },
 	{ v: 'mailboxes', l: 'Mailboxes', min: 'analyst' },
 	{ v: 'users', l: 'Users and access', min: 'manager' },
 	{ v: 'status', l: 'System status', min: 'analyst' },
@@ -77,10 +79,11 @@ const TABS: { v: string; l: string; min: Role }[] = [
 ];
 
 /** Old addresses (/admin/mailboxes …) open the matching tab, keeping any message in the address. */
-export function SettingsRedirect({ tab }: { tab: string }) {
+export function SettingsRedirect({ tab, sub }: { tab: string; sub?: string }) {
 	const loc = useLocation();
 	const sp = new URLSearchParams(loc.search);
 	sp.set('tab', tab);
+	if (sub) sp.set('sub', sub);
 	return <Navigate to={`/admin/settings?${sp.toString()}`} replace />;
 }
 
@@ -89,20 +92,23 @@ export default function Settings() {
 	const { can } = useAuth();
 	const [sp, setSp] = useSearchParams();
 	const tabs = TABS.filter((t) => can(t.min));
-	const tab = tabs.find((t) => t.v === sp.get('tab'))?.v || tabs[0]?.v;
+	// the old Addresses tab now lives in Master data
+	const asked = sp.get('tab') === 'addresses' ? 'master' : sp.get('tab');
+	const tab = tabs.find((t) => t.v === asked)?.v || tabs[0]?.v;
 	return (
 		<>
-			<PageHead kw="Settings" sub="Organisation, reply drafts, Gita Press addresses, mailboxes, users, system status and the audit log." />
+			<PageHead kw="Settings" sub="Organisation, reply drafts, master data (books, addresses, catalogues, names and codes, festivals, customer tiers), reasons for contacting, mailboxes, users, system status and the audit log." />
 			<div className="mb-16" style={{ overflowX: 'auto' }}>
 				<Segmented value={tab} options={tabs.map(({ v, l }) => ({ v, l }))} onChange={(v) => setSp({ tab: v }, { replace: true })} />
 			</div>
 			<div className="settings-tab">
 				{tab === 'general' && <OrgSettings part="general" />}
 				{tab === 'replies' && <OrgSettings part="replies" />}
-				{tab === 'addresses' && <Addresses />}
+				{tab === 'master' && <MasterData />}
+				{tab === 'reasons' && <Reasons />}
 				{tab === 'mailboxes' && <Mailboxes />}
 				{tab === 'users' && <Users />}
-				{tab === 'status' && <><SystemStatus /><Processing /></>}
+				{tab === 'status' && <><AnalyticsSchedule /><SystemStatus /><Processing /></>}
 				{tab === 'audit' && <Audit />}
 			</div>
 		</>
@@ -251,5 +257,31 @@ function SystemStatus() {
 				)}
 			</Card>
 		</div>
+	);
+}
+
+/** When the figures (customer links, order and Kalyan figures, tiers) are worked out: after every upload, and on this schedule. */
+function AnalyticsSchedule() {
+	const { can } = useAuth();
+	const toast = useToast();
+	const qc = useQueryClient();
+	const { data } = useQuery({ queryKey: ['analytics'], queryFn: () => api('/analytics'), refetchInterval: (q: any) => (q.state.data?.runs?.some((r: any) => ['running', 'queued'].includes(r.status)) ? 4000 : false) });
+	const save = useMutation({ mutationFn: (body: any) => api('/analytics/schedule', { method: 'PUT', body }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['analytics'] }); toast('Schedule saved'); }, onError: (e: any) => toast(e.message, 'error') });
+	const run = useMutation({ mutationFn: () => api('/analytics/run', { body: {} }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['analytics'] }); toast('Started'); }, onError: (e: any) => toast(e.message, 'error') });
+	if (!data) return null;
+	const last = data.runs?.[0];
+	return (
+		<Card title="Figures and customer links" accent={COLORS.teal} className="mb-16"
+			sub="Links people across email, orders and Kalyan, works out order and Kalyan figures and customer tiers. Runs after every upload and on this schedule (India time). Free: no AI is used.">
+			<div className="row wrap gap-16">
+				<label className="small">How often <select className="input sm" disabled={!can('admin')} value={data.schedule.frequency} onChange={(e) => save.mutate({ ...data.schedule, frequency: e.target.value })}>
+					{Object.entries(data.frequencies).map(([k, l]) => <option key={k} value={k}>{l as string}</option>)}</select></label>
+				<label className="small">At <select className="input sm" disabled={!can('admin')} value={data.schedule.hourIst} onChange={(e) => save.mutate({ ...data.schedule, hourIst: Number(e.target.value) })}>
+					{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}</select></label>
+				{can('manager') && <button className="btn sm" disabled={run.isPending} onClick={() => run.mutate()}><MdRefresh /> Run now</button>}
+			</div>
+			<div className="small mt-8">{last ? <>Last run: {last.status === 'done' ? 'done' : last.status === 'failed' ? `failed (${last.error})` : last.status} {ago(last.finished_at || last.started_at || last.requested_at)}{last.trigger ? `, started by ${String(last.trigger).startsWith('upload') ? 'an upload' : last.trigger === 'schedule' ? 'the schedule' : last.trigger}` : ''}.</> : 'Not run yet.'} Next scheduled run: {data.next ? new Date(data.next).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : ''}.</div>
+			{last?.steps && <div className="xs faint mt-4">{Object.entries(last.steps).map(([k, v]: [string, any]) => `${k} ${Math.round((v.ms || 0) / 100) / 10}s`).join(' · ')}</div>}
+		</Card>
 	);
 }

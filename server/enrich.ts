@@ -127,6 +127,7 @@ export async function enrichCustomer(customerId: number, opts: { web?: boolean }
 export async function enrichCustomers(orgId: number, deadline: number) {
 	const rows = await q<any>(
 		`select id from customers where org_id=$1 and profile_at is not null and (enriched_at is null or enriched_at < profile_at or enriched_at < last_contact_at)
+		    and exists (select 1 from conversations cv where cv.customer_id=customers.id)
 		  order by last_contact_at desc nulls last limit 200`,
 		[orgId],
 	);
