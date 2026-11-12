@@ -606,4 +606,299 @@ create table if not exists stock_files (
   content_type text not null default 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 );
 ` },
+{ id: '013_master_data_uploads_customers_reasons', sql: String.raw`
+-- ── Book master ────────────────────────────────────────────────────────────
+-- book_titles is the book master: one row per book code. Everything about a book hangs off its code.
+alter table book_titles add column if not exists hindi_raw text;
+alter table book_titles add column if not exists gitapress_url text;
+alter table book_titles add column if not exists amazon_url text;
+alter table book_titles add column if not exists family text;
+alter table book_titles add column if not exists family_manual boolean not null default false;
+alter table book_titles add column if not exists status text not null default 'needs_details';
+alter table book_titles add column if not exists category text;
+alter table book_titles add column if not exists mrp numeric;
+alter table book_titles add column if not exists lead_days int;
+alter table book_titles add column if not exists cover_days int;
+alter table book_titles add column if not exists min_print int;
+alter table book_titles add column if not exists in_master boolean not null default false;
+alter table book_titles add column if not exists flags text[] not null default '{}';
+alter table book_titles add column if not exists updated_by bigint references users(id) on delete set null;
+alter table book_titles drop constraint if exists book_titles_status_check;
+alter table book_titles add constraint book_titles_status_check check (status in ('active','needs_details','removed'));
+update book_titles set status='active', in_master=true, hindi_raw=hindi_title where hindi_title is not null and not in_master;
+create index if not exists book_titles_family_idx on book_titles (org_id, family);
+create table if not exists catalogues (
+  id          bigserial primary key,
+  org_id      bigint not null references organisations(id) on delete cascade,
+  category    text not null,
+  title       text not null default '',
+  url         text,
+  file_name   text,
+  bytes       bytea,
+  content_type text,
+  keywords    text[] not null default '{}',
+  updated_at  timestamptz not null default now(),
+  updated_by  bigint references users(id) on delete set null,
+  deleted_at  timestamptz
+);
+create index if not exists catalogues_org_idx on catalogues (org_id, category);
+
+-- ── Uploads of every kind (orders, Kalyan, book list, price list); stock keeps stock_uploads ──
+create table if not exists upload_batches (
+  id            bigserial primary key,
+  org_id        bigint not null references organisations(id) on delete cascade,
+  kind          text not null check (kind in ('orders','kalyan','books','prices')),
+  file_name     text not null default '',
+  file_size     bigint not null default 0,
+  status        text not null default 'receiving' check (status in ('receiving','queued','processing','done','failed')),
+  step          text,
+  header        text[] not null default '{}',
+  rows_received int not null default 0,
+  rows_total    int not null default 0,
+  rows_new      int not null default 0,
+  rows_updated  int not null default 0,
+  rows_unchanged int not null default 0,
+  rows_rejected int not null default 0,
+  profile       jsonb not null default '{}',
+  warnings      text[] not null default '{}',
+  error         text,
+  timing        jsonb not null default '{}',
+  uploaded_by   bigint references users(id) on delete set null,
+  uploaded_at   timestamptz not null default now(),
+  finished_at   timestamptz,
+  deleted_at    timestamptz,
+  deleted_by    bigint references users(id) on delete set null,
+  deleted_reason text
+);
+create index if not exists upload_batches_org_idx on upload_batches (org_id, kind, uploaded_at desc);
+create table if not exists upload_file_parts (
+  batch_id bigint not null references upload_batches(id) on delete cascade,
+  seq      int not null,
+  bytes    bytea not null,
+  primary key (batch_id, seq)
+);
+create table if not exists upload_stage (
+  batch_id bigint not null references upload_batches(id) on delete cascade,
+  rowno    int not null,
+  data     jsonb not null,
+  primary key (batch_id, rowno)
+);
+create table if not exists kalyan_stage (
+  batch_id   bigint not null references upload_batches(id) on delete cascade,
+  rowno      int not null,
+  custno     text not null,
+  subperiod  text not null default '',
+  name       text not null default '',
+  address    text not null default '',
+  city       text not null default '',
+  pin        text not null default '',
+  state      text not null default '',
+  phone      text not null default '',
+  phone10    text,
+  mode       text not null default '',
+  barcode    text,
+  dispdate   date not null,
+  from_issue smallint not null,
+  to_issue   smallint not null,
+  email      text,
+  email_ok   boolean not null default false,
+  state_norm text,
+  primary key (batch_id, rowno)
+);
+
+-- ── Orders (the Gita Press shipping export; each file holds all orders to date) ──
+create table if not exists orders (
+  org_id        bigint not null references organisations(id) on delete cascade,
+  order_key     text not null,
+  order_id      text not null,
+  mongo_id      text,
+  site          text,
+  customer_name text not null default '',
+  email         text,
+  email_ok      boolean not null default false,
+  phone         text,
+  phone10       text,
+  total         numeric,
+  subtotal      numeric,
+  postage       numeric,
+  payment_method text,
+  status_code   text,
+  status_label  text,
+  payment_status text,
+  ordered_at    timestamptz,
+  tracking_id   text,
+  tracking_ok   boolean not null default false,
+  partner_raw   text,
+  partner       text,
+  ship_name     text,
+  ship_address  text,
+  ship_city     text,
+  ship_pin      text,
+  ship_phone10  text,
+  customer_id   bigint references customers(id) on delete set null,
+  row_hash      text not null default '',
+  first_batch   bigint references upload_batches(id) on delete set null,
+  last_batch    bigint references upload_batches(id) on delete set null,
+  first_seen    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  primary key (org_id, order_key)
+);
+create index if not exists orders_customer_idx on orders (customer_id);
+create index if not exists orders_date_idx on orders (org_id, ordered_at desc);
+create index if not exists orders_mongo_idx on orders (org_id, mongo_id);
+create index if not exists orders_phone_idx on orders (org_id, phone10);
+create table if not exists order_status_history (
+  org_id      bigint not null,
+  order_key   text not null,
+  status_code text,
+  status_label text,
+  payment_status text,
+  tracking_id text,
+  batch_id    bigint references upload_batches(id) on delete set null,
+  seen_at     timestamptz not null default now()
+);
+create index if not exists order_status_history_idx on order_status_history (org_id, order_key, seen_at);
+
+-- ── Kalyan: one row per dispatch, one row per subscriber ──
+create table if not exists kalyan_dispatches (
+  org_id     bigint not null,
+  custno     text not null,
+  from_issue smallint not null,
+  to_issue   smallint not null,
+  dispdate   date not null,
+  occ        smallint not null default 1,
+  mode       text not null default '',
+  barcode    text,
+  subperiod  text not null default '',
+  batch_id   bigint references upload_batches(id) on delete set null,
+  primary key (org_id, custno, from_issue, to_issue, dispdate, occ)
+);
+create index if not exists kalyan_dispatches_date_idx on kalyan_dispatches (org_id, dispdate);
+create index if not exists kalyan_dispatches_batch_idx on kalyan_dispatches (batch_id);
+create table if not exists kalyan_subscribers (
+  org_id        bigint not null references organisations(id) on delete cascade,
+  custno        text not null,
+  name          text not null default '',
+  address       text not null default '',
+  city          text not null default '',
+  pin           text not null default '',
+  state         text not null default '',
+  state_norm    text,
+  phone         text not null default '',
+  phone10       text,
+  email         text,
+  email_ok      boolean not null default false,
+  sub_type      text not null default '',
+  mode          text not null default '',
+  first_dispatch date,
+  last_dispatch date,
+  first_issue_ym text,
+  last_issue_ym text,
+  dispatches    int not null default 0,
+  start_known   boolean not null default false,
+  renewal_est   date,
+  customer_id   bigint references customers(id) on delete set null,
+  updated_at    timestamptz not null default now(),
+  primary key (org_id, custno)
+);
+create index if not exists kalyan_subscribers_customer_idx on kalyan_subscribers (customer_id);
+create index if not exists kalyan_subscribers_phone_idx on kalyan_subscribers (org_id, phone10);
+
+-- ── One customer per person across email, orders and Kalyan ──
+alter table customers add column if not exists from_uploads boolean not null default false;
+alter table customers add column if not exists upload_profile jsonb not null default '{}';
+alter table customers add column if not exists orders_count int not null default 0;
+alter table customers add column if not exists orders_spend numeric not null default 0;
+alter table customers add column if not exists orders_first timestamptz;
+alter table customers add column if not exists orders_last timestamptz;
+alter table customers add column if not exists orders_12m int not null default 0;
+alter table customers add column if not exists spend_12m numeric not null default 0;
+alter table customers add column if not exists payment_methods text[] not null default '{}';
+alter table customers add column if not exists last_order_status text;
+alter table customers add column if not exists kalyan_buyer boolean not null default false;
+alter table customers add column if not exists kalyan_custnos text[] not null default '{}';
+alter table customers add column if not exists kalyan_type text;
+alter table customers add column if not exists kalyan_first date;
+alter table customers add column if not exists kalyan_last date;
+alter table customers add column if not exists kalyan_mode text;
+alter table customers add column if not exists kalyan_renewal date;
+alter table customers add column if not exists kalyan_start_known boolean not null default false;
+alter table customers add column if not exists buyer_tier text not null default 'regular';
+alter table customers add column if not exists buyer_points numeric not null default 0;
+alter table customers add column if not exists buyer_why text[] not null default '{}';
+alter table customers add column if not exists data_gaps text[] not null default '{}';
+alter table customers add column if not exists matched_by text[] not null default '{}';
+alter table customers drop constraint if exists customers_buyer_tier_check;
+alter table customers add constraint customers_buyer_tier_check check (buyer_tier in ('platinum','gold','silver','regular'));
+create index if not exists customers_buyer_tier_idx on customers (org_id, buyer_tier);
+create index if not exists customers_kalyan_idx on customers (org_id) where kalyan_buyer;
+create index if not exists customers_name_pin_idx on customers (org_id, lower(name), (upload_profile->>'pin')) where from_uploads;
+create table if not exists customer_phones (
+  org_id      bigint not null references organisations(id) on delete cascade,
+  phone10     text not null,
+  customer_id bigint not null references customers(id) on delete cascade,
+  source      text not null default '',
+  primary key (org_id, phone10)
+);
+create index if not exists customer_phones_customer_idx on customer_phones (customer_id);
+create table if not exists customer_reviews (
+  id          bigserial primary key,
+  org_id      bigint not null references organisations(id) on delete cascade,
+  kind        text not null check (kind in ('email_phone','name_pin')),
+  customer_a  bigint not null references customers(id) on delete cascade,
+  customer_b  bigint not null references customers(id) on delete cascade,
+  detail      text not null default '',
+  status      text not null default 'open' check (status in ('open','merged','dismissed')),
+  created_at  timestamptz not null default now(),
+  decided_by  bigint references users(id) on delete set null,
+  decided_at  timestamptz,
+  unique (org_id, kind, customer_a, customer_b)
+);
+create index if not exists customer_reviews_open_idx on customer_reviews (org_id, status);
+alter table contacts add column if not exists source text;
+
+-- ── Analytics runs (after every upload and on a schedule) ──
+create table if not exists analytics_runs (
+  id          bigserial primary key,
+  org_id      bigint not null references organisations(id) on delete cascade,
+  trigger     text not null default 'schedule',
+  status      text not null default 'running' check (status in ('queued','running','done','failed')),
+  steps       jsonb not null default '{}',
+  error       text,
+  requested_at timestamptz not null default now(),
+  started_at  timestamptz,
+  finished_at timestamptz
+);
+create index if not exists analytics_runs_org_idx on analytics_runs (org_id, requested_at desc);
+
+-- ── Reasons for contacting, editable in Settings (seeded from the list in code) ──
+create table if not exists purpose_defs (
+  org_id      bigint not null references organisations(id) on delete cascade,
+  key         text not null,
+  label       text not null,
+  description text not null default '',
+  keywords    text[] not null default '{}',
+  group_name  text not null default 'Other',
+  sort_order  int not null default 0,
+  hidden      boolean not null default false,
+  locked      boolean not null default false,
+  builtin     boolean not null default false,
+  merged_into text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  updated_by  bigint references users(id) on delete set null,
+  primary key (org_id, key)
+);
+create table if not exists purpose_retags (
+  id          bigserial primary key,
+  org_id      bigint not null references organisations(id) on delete cascade,
+  key         text not null,
+  last_conversation_id bigint not null default 0,
+  checked     int not null default 0,
+  tagged      int not null default 0,
+  status      text not null default 'queued' check (status in ('queued','done')),
+  created_at  timestamptz not null default now(),
+  finished_at timestamptz
+);
+` },
 ];

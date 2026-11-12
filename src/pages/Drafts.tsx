@@ -6,6 +6,7 @@ import { api, qs } from '../api/client';
 import { useFilters } from '../contexts/FilterContext';
 import DraftEditor, { countPlaceholders, placeholderList } from '../components/DraftEditor';
 import { Card, Empty, Facts, Loader, PageHead, RagBadge, RagDot, Segmented, SentimentBadge, Story } from '../components/ui';
+import { BuyerTier } from './admin/CustomerDb';
 import { BUSINESS_LABELS, COLORS, ago, bizLabel, fmtDateTime } from '../lib/format';
 import { useTaxonomy } from '../lib/taxonomy';
 import { Drop } from '../components/FilterStrip';
@@ -112,6 +113,7 @@ export default function Drafts() {
 									<div className="row" style={{ gap: 8 }}>
 										<RagDot rag={r.rag} />
 										<b className="truncate grow">{r.customer_name || r.to_addresses?.[0]}</b>
+										<BuyerTier t={r.buyer_tier} />
 										<span className="xs faint nowrap">{ago(status === 'sent' ? r.sent_at : r.last_inbound_at)}</span>
 									</div>
 									<div className="small truncate">{r.conv_subject || '(no subject)'}</div>

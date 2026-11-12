@@ -1,3 +1,6 @@
+import { processBatches } from './uploads/batches';
+import { analyticsTick } from './analytics';
+import { retagTick } from './ai/purposeDefs';
 import { one, q, ensureSchema } from './db';
 import { defaultOrgId } from './auth';
 import { getOrg } from './settings';
@@ -45,11 +48,25 @@ export async function syncMailbox(mailboxId: number, maxMessages = 300) {
  * One worker cycle: sync every active mailbox (resuming large backfills), analyse changed
  * conversations, evaluate SLA alerts and escalations, send due reports.
  */
+/** Works through queued uploads, then the analytics run and keyword re-tagging that follow them. Has its own lock, so it does not wait for a mail sync. */
+export async function runUploads(budgetMs = 10 * 60_000) {
+	await ensureSchema();
+	const orgId = await defaultOrgId();
+	const deadline = Date.now() + budgetMs;
+	const out: Record<string, unknown> = {};
+	out.uploads = await processBatches(orgId, deadline).catch((e) => ({ error: e.message }));
+	out.analytics = Date.now() < deadline - 60_000 ? await analyticsTick(orgId).catch((e) => ({ error: e.message })) : { skipped: 'out of time' };
+	out.retagged = await retagTick(orgId, Math.min(deadline, Date.now() + 20_000)).catch((e) => ({ error: e.message }));
+	return out;
+}
+
 export async function runTick(opts: { budgetMs?: number; mailboxId?: number; reports?: boolean } = {}) {
 	await loadServiceAccount();
 	await ensureSchema();
 	const orgId = await defaultOrgId();
 	const budget = opts.budgetMs ?? 12 * 60_000;
+	// uploads have their own lock: queued files, the analytics run and keyword re-tagging go first, within a third of the time
+	const uploadsLog = opts.mailboxId ? null : await runUploads(Math.round(budget / 3)).catch((e) => ({ error: e.message }));
 	const deadline = Date.now() + budget;
 	const log: Record<string, unknown> = {};
 	// one full run at a time: the scheduler fires every 5 minutes and a run can last 13
@@ -106,7 +123,7 @@ export async function runTick(opts: { budgetMs?: number; mailboxId?: number; rep
 }
 
 /** Data retention: remove email bodies beyond the configured retention period. */
-async function purgeExpired(orgId: number) {
+export async function purgeExpired(orgId: number) {
 	const org = await getOrg(orgId);
 	const days = org.settings.retentionDays;
 	if (!days || days < 30) return;

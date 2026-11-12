@@ -28,12 +28,18 @@ export interface InventorySettings {
 	/** branch godowns whose outwards are transfers to the shop, not sales (besides any named "...Godown...") */
 	nonSalesGodowns: string[];
 }
-export const INVENTORY_DEFAULTS: InventorySettings = { coverDays: 60, leadDays: 21, branches: {}, nonSalesGodowns: [] };
+/**
+ * Delhi's three godowns pass stock on rather than sell it (decided by Gita Press, November 2026): their outwards are
+ * transfers. Every sales figure is an estimate from Tally stock movement until a real sales file is available.
+ */
+export const DELHI_TRANSFER_GODOWNS = ['Delhi Branch Location', 'Delhi Whole Sale Location', 'Delhi Retail Location'];
+export const INVENTORY_DEFAULTS: InventorySettings = { coverDays: 60, leadDays: 21, branches: {}, nonSalesGodowns: DELHI_TRANSFER_GODOWNS };
+export const SALES_ESTIMATE_NOTE = 'Estimated from Tally stock movement; Delhi godowns treated as transfers; true sales data not yet available';
 
 export async function inventorySettings(orgId: number): Promise<InventorySettings> {
 	const org = await getOrg(orgId);
 	const s = (org.settings as any).inventory || {};
-	return { ...INVENTORY_DEFAULTS, ...s, branches: { ...(s.branches || {}) }, nonSalesGodowns: s.nonSalesGodowns || [] };
+	return { ...INVENTORY_DEFAULTS, ...s, branches: { ...(s.branches || {}) }, nonSalesGodowns: s.nonSalesGodowns || DELHI_TRANSFER_GODOWNS };
 }
 
 export async function saveInventorySettings(orgId: number, input: any): Promise<InventorySettings> {
@@ -57,7 +63,7 @@ export async function saveInventorySettings(orgId: number, input: any): Promise<
 }
 
 /** After the list of transfer-only godowns changes, re-mark branch rows (no re-upload needed). */
-async function reclassifyGodowns(orgId: number, nonSales: string[]) {
+export async function reclassifyGodowns(orgId: number, nonSales: string[]) {
 	const list = nonSales.map((x) => x.toLowerCase().replace(/\s+/g, ' ').trim());
 	await q(
 		`update stock_rows r set godown_kind = case when lower(regexp_replace(r.godown, '\\s+', ' ', 'g')) = any($2::text[]) or r.godown ilike '%godown%' then 'godown' else 'store' end
@@ -96,18 +102,25 @@ export async function importStock(orgId: number, userId: number | null, slot: 'h
 	const rows: any[] = [];
 	const sheetInfo: { sheet: string; location: string | null; rows: number }[] = [];
 	let negative = 0;
+	const foreign = new Map<string, number>();
 	for (const s of useful) {
 		const location = scope === 'hq' ? HQ_KEY : locationForSheet(s.sheet, s.rows.map((r) => r.godown));
 		sheetInfo.push({ sheet: s.sheet, location, rows: s.rows.length });
 		if (!location) { warnings.push(`Sheet "${s.sheet}" was skipped: it does not match any Gita Press branch`); continue; }
 		if (scope === 'branch' && location === HQ_KEY) { warnings.push(`Sheet "${s.sheet}" looks like Gorakhpur stock; Gorakhpur stock comes from the HQ file, so it was skipped`); continue; }
 		for (const r of s.rows) {
+			// a godown of another branch (or of Gorakhpur) listed on this branch's sheet is not counted for any branch
+			if (scope === 'branch') {
+				const other = locationForSheet('', [r.godown]);
+				if ((other && other !== location) || /^main stock/i.test(r.godown.trim())) { foreign.set(`${s.sheet}: ${r.godown.trim()}`, (foreign.get(`${s.sheet}: ${r.godown.trim()}`) || 0) + 1); continue; }
+			}
 			if (r.closing < 0) negative++;
 			rows.push({ location, kind: godownKind(scope, s.sheet, r.godown, settings.nonSalesGodowns), ...r });
 		}
 	}
 	if (!rows.length) throw new HttpError(400, `No sheet in this file matched a Gita Press location. ${warnings.join('. ')}`);
 	if (negative) warnings.push(`${negative} rows have a negative closing stock in Tally; they count as zero`);
+	if (foreign.size) warnings.push(`${[...foreign.values()].reduce((a, b) => a + b, 0)} rows were ignored because the godown belongs to another location: ${[...foreign.entries()].map(([k, n]) => `${k} (${n})`).join('; ')}`);
 	const locations = [...new Set(rows.map((r) => r.location))];
 	if (scope === 'branch') {
 		const missing = DIRECTORY.filter((d) => !d.head_office && !d.no_stock && !locations.includes(d.key)).map((d) => d.city);
@@ -155,9 +168,9 @@ export async function importStock(orgId: number, userId: number | null, slot: 'h
 	const top = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 	const codes = [...byCode.keys()];
 	await q(
-		`insert into book_titles (org_id, code, name, language) select $1, * from unnest($2::text[], $3::text[], $4::text[])
-		 on conflict (org_id, code) do update set name = case when excluded.name <> '' then excluded.name else book_titles.name end,
-		   language = case when excluded.language <> '' then excluded.language else book_titles.language end, updated_at = now()`,
+		`insert into book_titles (org_id, code, name, language, status) select $1, x.*, 'needs_details' from unnest($2::text[], $3::text[], $4::text[]) x
+		 on conflict (org_id, code) do update set name = case when book_titles.in_master and book_titles.name <> '' then book_titles.name when excluded.name <> '' then excluded.name else book_titles.name end,
+		   language = case when book_titles.in_master and book_titles.language <> '' then book_titles.language when excluded.language <> '' then excluded.language else book_titles.language end`,
 		[orgId, codes.map((c) => c.slice(0, 40)), codes.map((c) => top(byCode.get(c)!.names).slice(0, 300)), codes.map((c) => top(byCode.get(c)!.langs).slice(0, 40))],
 	);
 	cache.delete(orgId);
@@ -311,6 +324,12 @@ const WORD = /[\p{L}\p{M}]+/gu;
 const STOP = new Set(['shri', 'shree', 'sri', 'shrimad', 'srimad', 'the', 'of', 'and', 'set', 'part', 'vol', 'volume', 'edition', 'size', 'pocket', 'gutka', 'mota', 'type', 'big', 'small',
 	'deluxe', 'delux', 'special', 'hindi', 'english', 'sanskrit', 'gujarati', 'marathi', 'bangla', 'bengali', 'telugu', 'tamil', 'kannada', 'oriya', 'odia', 'nepali', 'assamiya', 'book', 'books', 'pustak', 'with', 'in', 'only', 'no']);
 const DEV_STOP = new Set(['श्री', 'श्रीमद्', 'की', 'का', 'के', 'और', 'भाग', 'खण्ड', 'सहित']);
+
+/** One key for a title however it is spelt or scripted, without filler words: used to group the editions of one work. */
+export function titleKey(title: string): string {
+	const words = (title.replace(/\(\s*\d+\s*\)|\b\d+\b/g, ' ').match(WORD) || []).filter((w) => !STOP.has(w.toLowerCase()) && !DEV_STOP.has(w));
+	return words.map(skeleton).join('');
+}
 
 interface Indexed { code: string; lists: { skel: string[]; core: boolean[] }[] }
 function indexBook(b: Book): Indexed {

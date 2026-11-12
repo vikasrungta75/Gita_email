@@ -7,7 +7,7 @@ import { q } from '../db';
 import { heuristicAnalyse } from './heuristic';
 import { normaliseSubcategory, taxonomyForPrompt } from './taxonomy';
 import { normalisePurposes, purposesForPrompt } from './purposes';
-import { ANALYSIS_SCHEMA, BUSINESS_CATEGORIES, CATEGORIES, PROPOSAL_STAGES, type Analysis, type ThreadInput } from './types';
+import { ANALYSIS_SCHEMA, analysisSchema, BUSINESS_CATEGORIES, CATEGORIES, PROPOSAL_STAGES, type Analysis, type ThreadInput } from './types';
 
 export type Provider = 'gemini' | 'anthropic' | 'openai' | 'azure' | 'heuristic';
 
@@ -366,7 +366,7 @@ export async function analyseThread(input: ThreadInput, orgId: number): Promise<
 			const r = await geminiCall({
 				system: SYSTEM(input.orgName),
 				prompt: `${buildPrompt(input).replace('call record_analysis', 'return the analysis as a single JSON object')}\n\nReturn ONLY a JSON object with exactly these fields: ${Object.keys((ANALYSIS_SCHEMA as any).properties).join(', ')}.`,
-				schema: ANALYSIS_SCHEMA,
+				schema: analysisSchema(),
 				maxTokens: 6000,
 			});
 			await logUsage(orgId, model, r.usage.promptTokenCount, (r.usage.candidatesTokenCount || 0) + (r.usage.thoughtsTokenCount || 0), 'analysis');
@@ -378,7 +378,7 @@ export async function analyseThread(input: ThreadInput, orgId: number): Promise<
 				max_tokens: 6000,
 				// the system prompt is identical for every thread, so it is cached
 				system: [{ type: 'text', text: SYSTEM(input.orgName), cache_control: { type: 'ephemeral' } }],
-				tools: [{ name: 'record_analysis', description: 'Record the structured analysis of the email conversation.', input_schema: ANALYSIS_SCHEMA }],
+				tools: [{ name: 'record_analysis', description: 'Record the structured analysis of the email conversation.', input_schema: analysisSchema() }],
 				messages: [{ role: 'user', content: buildPrompt(input) }],
 			}, 'record_analysis');
 			await logUsage(orgId, model, data.usage?.input_tokens, data.usage?.output_tokens, 'analysis');
@@ -392,7 +392,7 @@ export async function analyseThread(input: ThreadInput, orgId: number): Promise<
 				{ role: 'system', content: SYSTEM(input.orgName) },
 				{ role: 'user', content: buildPrompt(input) },
 			],
-			tools: [{ type: 'function', function: { name: 'record_analysis', description: 'Record the structured analysis.', parameters: ANALYSIS_SCHEMA } }],
+			tools: [{ type: 'function', function: { name: 'record_analysis', description: 'Record the structured analysis.', parameters: analysisSchema() } }],
 			tool_choice: { type: 'function', function: { name: 'record_analysis' } },
 		});
 		await logUsage(orgId, model, data.usage?.prompt_tokens, data.usage?.completion_tokens, 'analysis');

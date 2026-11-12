@@ -272,7 +272,7 @@ export async function loadDemoData(orgId: number, assignToUserId?: number) {
 export async function clearDemoData(orgId: number) {
 	await q(`delete from conversations where org_id=$1 and id in (select distinct e.conversation_id from emails e join mailboxes m on m.id=e.mailbox_id where m.provider='demo')`, [orgId]);
 	await q(`delete from mailboxes where org_id=$1 and provider='demo'`, [orgId]);
-	await q(`delete from customers c where org_id=$1 and not exists (select 1 from conversations v where v.customer_id=c.id)`, [orgId]);
+	await q(`delete from customers c where org_id=$1 and not c.from_uploads and c.orders_count = 0 and not c.kalyan_buyer and not exists (select 1 from conversations v where v.customer_id=c.id)`, [orgId]);
 	await q(`delete from alerts a where org_id=$1 and conversation_id is null and customer_id is null`, [orgId]);
 	await q(`delete from action_items where org_id=$1 and conversation_id is null and source='demo'`, [orgId]).catch(() => {});
 }
