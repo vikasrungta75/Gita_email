@@ -78,7 +78,7 @@ export async function reclassifyGodowns(orgId: number, nonSales: string[]) {
 
 const displayName = (n: string) => n.replace(/\s*-?\s*\(\s*\d+\s*\)\s*$/, '').replace(/\s*-\s*\d{2,5}\s*$/, '').replace(/\s{2,}/g, ' ').trim() || n;
 
-export async function importStock(orgId: number, userId: number | null, slot: 'hq' | 'branch', fileName: string, data: Uint8Array) {
+export async function importStock(orgId: number, userId: number | null, slot: 'hq' | 'branch', fileName: string, data: Uint8Array, dryRun = false) {
 	if (!['hq', 'branch'].includes(slot)) throw new HttpError(400, 'Choose the HQ or the branch upload');
 	let sheets;
 	try {
@@ -127,6 +127,21 @@ export async function importStock(orgId: number, userId: number | null, slot: 'h
 		if (missing.length) warnings.push(`No sheet for: ${missing.join(', ')}. Their last uploaded stock stays in use`);
 	}
 
+	if (dryRun) {
+		// the check summary shown before anything is saved, compared with the latest upload of the same kind
+		const prev = await one<any>(`select id, file_name, period_from::text as period_from, period_to::text as period_to, row_count, locations, uploaded_at from stock_uploads where org_id=$1 and scope=$2 and deleted_at is null order by period_to desc, uploaded_at desc limit 1`, [orgId, scope]);
+		const prevCodes = prev ? new Set((await q<any>('select distinct code from stock_rows where upload_id=$1', [prev.id])).map((r) => r.code)) : null;
+		const codes = new Set(rows.map((r) => r.code));
+		const known = new Set((await q<any>('select code from book_titles where org_id=$1', [orgId])).map((r) => r.code));
+		const samePeriod = await one<any>(`select count(*)::int n from stock_uploads where org_id=$1 and scope=$2 and period_from=$3 and period_to=$4 and deleted_at is null`, [orgId, scope, period.from, period.to]);
+		return {
+			preview: true, scope, period, locations, rows: rows.length, books: codes.size, sheets: sheetInfo, warnings,
+			newBooks: [...codes].filter((c) => !known.has(c)).length,
+			replacesSamePeriod: samePeriod?.n || 0,
+			previous: prev ? { file: prev.file_name, period: { from: prev.period_from, to: prev.period_to }, rows: prev.row_count, at: prev.uploaded_at,
+				booksAdded: [...codes].filter((c) => !prevCodes!.has(c)).length, booksGone: [...prevCodes!].filter((c) => !codes.has(c)).length } : null,
+		};
+	}
 	// the same period uploaded again replaces the earlier figures for the same locations (so a branch file may be split in two).
 	// Nothing is erased: the older upload keeps its rows and file; the replaced locations are only taken out of use.
 	const replaced = await q<any>(

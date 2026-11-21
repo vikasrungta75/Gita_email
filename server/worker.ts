@@ -1,5 +1,6 @@
 import { processBatches } from './uploads/batches';
 import { analyticsTick } from './analytics';
+import { enrichPending, markAllForEnrich } from './email/enrich';
 import { retagTick } from './ai/purposeDefs';
 import { one, q, ensureSchema } from './db';
 import { defaultOrgId } from './auth';
@@ -55,6 +56,8 @@ export async function runUploads(budgetMs = 10 * 60_000) {
 	const deadline = Date.now() + budgetMs;
 	const out: Record<string, unknown> = {};
 	out.uploads = await processBatches(orgId, deadline).catch((e) => ({ error: e.message }));
+	// new orders, tracking, stock or customers can complete emails that were waiting for them
+	if ((out.uploads as any)?.done?.length) await markAllForEnrich(orgId).catch(() => {});
 	out.analytics = Date.now() < deadline - 60_000 ? await analyticsTick(orgId).catch((e) => ({ error: e.message })) : { skipped: 'out of time' };
 	out.retagged = await retagTick(orgId, Math.min(deadline, Date.now() + 20_000)).catch((e) => ({ error: e.message }));
 	return out;
@@ -104,6 +107,8 @@ export async function runTick(opts: { budgetMs?: number; mailboxId?: number; rep
 		if (n === 0) break;
 	}
 	log.analysed = analysed;
+	// facts, questions, completeness and criticality for every email that changed
+	log.enriched = await enrichPending(orgId, Math.min(deadline - 10_000, Date.now() + 90_000)).catch((e) => (console.error('[enrich]', e.message), 0));
 	log.subgroups = await backfillSubcategories(orgId).catch((e) => (console.error('[subgroups]', e.message), 0));
 	log.purposes = await backfillPurposes(orgId).catch((e) => (console.error('[purposes]', e.message), 0));
 	if (Date.now() < deadline - 20_000) log.profiles = await buildProfiles(orgId, deadline - 15_000).catch((e) => (console.error('[profiles]', e.message), null));

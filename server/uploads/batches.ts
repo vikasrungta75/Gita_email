@@ -11,8 +11,10 @@ import { HttpError } from '../http';
 import { clean, dateOnly, getMappings, headKey, phone10, pin6, stateName, subType, validEmail } from './common';
 import { processOrders } from './orders';
 import { processKalyan } from './kalyan';
+import { applyKalyanCustomers, checkHeader, custnoIndex, reviewKalyanCustomers } from '../kalyan/customers';
 
 export type UploadKind = 'orders' | 'kalyan';
+export const CUSTOMER_KINDS = ['kalyan_master', 'kalyan_current'];
 
 /** Columns each file must have (compared without case, spaces or punctuation). */
 export const COLUMNS: Record<UploadKind, { key: string; label: string; optional?: boolean }[]> = {
@@ -21,7 +23,7 @@ export const COLUMNS: Record<UploadKind, { key: string; label: string; optional?
 	kalyan: [...['subperiod', 'custno', 'NAME', 'ADDRESS', 'city', 'pin', 'state', 'PhoneNo', 'DispMode', 'sbarcodeno', 'dispdate', 'Fromissue', 'Toissue', 'EmailID'].map((label) => ({ key: headKey(label), label })),
 		{ key: 'returnsts', label: 'Returnsts', optional: true }],
 };
-export const KIND_LABEL: Record<string, string> = { orders: 'Orders', kalyan: 'Kalyan dispatch', books: 'Book list', prices: 'Price list', hq: 'Head office stock', branch: 'Branch stock' };
+export const KIND_LABEL: Record<string, string> = { orders: 'Book orders (tracking)', kalyan: 'Kalyan tracking', books: 'Book links', prices: 'Price list', hq: 'Main, retail and semi-finished stock', branch: 'Branch stock', kalyan_master: 'Kalyan customers (all)', kalyan_current: 'Kalyan customers (current year)' };
 
 const mine = async (orgId: number, id: number) => {
 	const b = await one<any>('select * from upload_batches where id=$1 and org_id=$2', [id, orgId]);
@@ -31,8 +33,16 @@ const mine = async (orgId: number, id: number) => {
 
 /** Checks the column headings before anything is written, and opens the upload. */
 export async function startBatch(orgId: number, userId: number | null, input: { kind: string; fileName?: string; fileSize?: number; header?: unknown[] }) {
+	if (CUSTOMER_KINDS.includes(input.kind)) {
+		const header = checkHeader(input.kind, (Array.isArray(input.header) ? input.header : []).map((h) => clean(h, 80)));
+		const b = await one<any>(
+			`insert into upload_batches (org_id, kind, file_name, file_size, status, header, uploaded_by, options) values ($1,$2,$3,$4,'receiving',$5,$6,$7) returning id`,
+			[orgId, input.kind, clean(input.fileName || `${input.kind}.xlsx`, 200), Math.max(0, Number(input.fileSize) || 0), header, userId, JSON.stringify((input as any).options || {})],
+		);
+		return { id: b.id as number, kind: input.kind };
+	}
 	const kind = input.kind as UploadKind;
-	if (!COLUMNS[kind]) throw new HttpError(400, 'Choose the Orders or the Kalyan dispatch upload');
+	if (!COLUMNS[kind]) throw new HttpError(400, 'Choose the Book orders or the Kalyan tracking upload');
 	const header = (Array.isArray(input.header) ? input.header : []).map((h) => clean(h, 80));
 	const keys = header.map(headKey);
 	const other: UploadKind = kind === 'orders' ? 'kalyan' : 'orders';
@@ -63,7 +73,23 @@ export async function addRows(orgId: number, id: number, input: { start?: number
 	const ix = (k: string) => keys.indexOf(k);
 	const problems: string[] = [];
 	let rejected = 0;
-	if (b.kind === 'orders') {
+	if (CUSTOMER_KINDS.includes(b.kind)) {
+		const header: string[] = b.header;
+		const ci = custnoIndex(header);
+		const hk = header.map(headKey);
+		const paidIx = hk.indexOf('paymentdate');
+		const subIx = hk.findIndex((k) => k === 'duration' || k === 'subperiod');
+		const data: any[] = [];
+		rows.forEach((r, n) => {
+			if (!r || !r.some((v) => v !== '' && v !== null && v !== undefined)) return;
+			const custno = clean(r[ci], 30).replace(/\.0+$/, '').toUpperCase();
+			if (!custno) { rejected++; if (problems.length < 5) problems.push(`Row ${start + n + 2}: no customer number`); return; }
+			const obj: Record<string, unknown> = { _custno: custno, _sub: subIx >= 0 ? clean(r[subIx], 10).toUpperCase() : '', _paid: paidIx >= 0 ? dateOnly(r[paidIx]) : null };
+			header.forEach((h, i) => { if (h && r[i] !== '' && r[i] !== null && r[i] !== undefined) obj[h] = typeof r[i] === 'number' ? r[i] : clean(r[i], 400); });
+			data.push({ rowno: start + n, data: obj });
+		});
+		if (data.length) await q(`insert into kalyan_customer_stage (batch_id, rowno, data) select $1, x.rowno, x.data from jsonb_to_recordset($2::jsonb) as x(rowno int, data jsonb) on conflict do nothing`, [id, JSON.stringify(data)]);
+	} else if (b.kind === 'orders') {
 		const cols = COLUMNS.orders.map((c) => ({ label: c.label, i: ix(c.key) }));
 		const data = rows.map((r, n) => ({ rowno: start + n, data: Object.fromEntries(cols.map((c) => [c.label, clean(r[c.i], 400)])) })).filter((x) => Object.values(x.data).some(Boolean));
 		await q(`insert into upload_stage (batch_id, rowno, data) select $1, x.rowno, x.data from jsonb_to_recordset($2::jsonb) as x(rowno int, data jsonb) on conflict do nothing`, [id, JSON.stringify(data)]);
@@ -116,16 +142,61 @@ export async function finishBatch(orgId: number, id: number, input: { rows?: num
 	const b = await mine(orgId, id);
 	if (b.status !== 'receiving') return b;
 	const sent = Math.max(0, Number(input.rows) || 0);
-	const staged = b.kind === 'orders'
-		? (await one<any>('select count(*)::int n from upload_stage where batch_id=$1', [id]))!.n
-		: (await one<any>('select count(*)::int n from kalyan_stage where batch_id=$1', [id]))!.n;
+	const table = CUSTOMER_KINDS.includes(b.kind) ? 'kalyan_customer_stage' : b.kind === 'orders' ? 'upload_stage' : 'kalyan_stage';
+	const staged = (await one<any>(`select count(*)::int n from ${table} where batch_id=$1`, [id]))!.n;
 	if (!staged) {
 		await q(`update upload_batches set status='failed', error='No rows could be read from this file.', finished_at=now() where id=$1`, [id]);
 		throw new HttpError(400, b.rows_rejected ? `No rows could be used: ${(b.warnings || []).slice(0, 3).join('; ')}` : 'No rows were found in this file.');
 	}
 	if (sent && Math.abs(sent - b.rows_received) > 0) throw new HttpError(400, `Only ${b.rows_received} of ${sent} rows arrived. Please upload the file again.`);
-	await q(`update upload_batches set status='queued', step='queued', rows_total=$2 where id=$1`, [id, staged]);
+	// nothing is applied yet: the check summary is shown and an admin confirms (or cancels) the upload
+	await q(`update upload_batches set status='review', step='waiting for confirmation', rows_total=$2 where id=$1`, [id, staged]);
+	const review = await reviewBatch(orgId, await mine(orgId, id));
+	await q(`update upload_batches set review=$2 where id=$1`, [id, JSON.stringify(review)]);
 	return mine(orgId, id);
+}
+
+/** The check summary shown before an upload is applied: rows, new and already known, problems, and the previous upload. */
+export async function reviewBatch(orgId: number, b: any) {
+	if (CUSTOMER_KINDS.includes(b.kind)) return reviewKalyanCustomers(orgId, b);
+	const prev = await one<any>(`select rows_total, rows_new, uploaded_at from upload_batches where org_id=$1 and kind=$2 and status='done' and deleted_at is null and id <> $3 order by id desc limit 1`, [orgId, b.kind, b.id]);
+	if (b.kind === 'orders') {
+		const r = await one<any>(
+			`with s as (select distinct upper(regexp_replace(data->>'orderId', '\s+', '', 'g')) as k, data from upload_stage where batch_id=$1)
+			 select count(*)::int as rows, count(distinct k)::int as orders,
+			        count(distinct k) filter (where exists (select 1 from orders o where o.org_id=$2 and o.order_key=s.k))::int as known,
+			        min(data->>'createdAt') as first, max(data->>'createdAt') as last,
+			        count(*) filter (where data->>'trackingId' ~* '^\d(\.\d+)?e\+?\d+$')::int as damaged_tracking,
+			        count(*) filter (where coalesce(data->>'trackingId','') = '')::int as no_tracking
+			   from s`, [b.id, orgId]);
+		const statuses = await q<any>(`select coalesce(nullif(data->>'orderStatusLabel',''), data->>'orderStatusCode', '?') as k, count(*)::int as n from upload_stage where batch_id=$1 group by 1 order by 2 desc`, [b.id]);
+		return { rows: b.rows_total, orders: r.orders, new: r.orders - r.known, alreadyKnown: r.known, dates: { first: r.first, last: r.last }, damagedTracking: r.damaged_tracking, noTracking: r.no_tracking,
+			statuses, rejected: b.rows_rejected, problems: (b.warnings || []).slice(0, 10), previous: prev ? { rows: prev.rows_total, at: prev.uploaded_at } : null };
+	}
+	const r = await one<any>(
+		`select count(*)::int as rows, count(distinct custno)::int as customers, min(dispdate)::text as first, max(dispdate)::text as last,
+		        count(*) filter (where mode='ORDINARY')::int as ordinary, count(*) filter (where mode='REGISTERED')::int as registered,
+		        count(*) filter (where exists (select 1 from kalyan_dispatches d where d.org_id=$2 and d.custno=s.custno and d.from_issue=s.from_issue and d.to_issue=s.to_issue and d.dispdate=s.dispdate))::int as known
+		   from kalyan_stage s where batch_id=$1`, [b.id, orgId]);
+	const months = await q<any>(`select to_char(dispdate,'YYYY-MM') as k, count(*)::int as n, count(*) filter (where mode='ORDINARY')::int as ordinary from kalyan_stage where batch_id=$1 group by 1 order by 1`, [b.id]);
+	return { rows: r.rows, customers: r.customers, new: r.rows - r.known, alreadyKnown: r.known, dates: { first: r.first, last: r.last }, ordinary: r.ordinary, registered: r.registered, months,
+		rejected: b.rows_rejected, problems: (b.warnings || []).slice(0, 10), previous: prev ? { rows: prev.rows_total, at: prev.uploaded_at } : null };
+}
+
+/** The admin confirms the check summary: the upload is applied in the background. */
+export async function confirmBatch(orgId: number, id: number, input: { year?: number }) {
+	const b = await mine(orgId, id);
+	if (b.status !== 'review') throw new HttpError(400, 'This upload is not waiting for confirmation');
+	const options = { ...(b.options || {}), ...(input?.year ? { year: Math.round(Number(input.year)) } : {}) };
+	await q(`update upload_batches set status='queued', step='queued', options=$2 where id=$1`, [id, JSON.stringify(options)]);
+	return mine(orgId, id);
+}
+export async function cancelBatch(orgId: number, id: number) {
+	const b = await mine(orgId, id);
+	if (!['review', 'receiving'].includes(b.status)) throw new HttpError(400, 'Only an upload waiting for confirmation can be cancelled');
+	for (const t of ['upload_stage', 'kalyan_stage', 'kalyan_customer_stage']) await q(`delete from ${t} where batch_id=$1`, [id]);
+	await q(`update upload_batches set status='cancelled', step='cancelled', finished_at=now() where id=$1`, [id]);
+	return { success: true };
 }
 
 const lease = async (name: string, holder: string, secs: number) => (await q<any>(
@@ -143,7 +214,7 @@ export async function processBatches(orgId: number, deadline = Date.now() + 10 *
 	try {
 		// an upload the browser never finished is closed after a day; its staged rows are dropped
 		const stale = await q<any>(`update upload_batches set status='failed', error='The upload was not completed.', finished_at=now() where org_id=$1 and status='receiving' and uploaded_at < now() - interval '24 hours' returning id`, [orgId]);
-		for (const s of stale) { await q('delete from upload_stage where batch_id=$1', [s.id]); await q('delete from kalyan_stage where batch_id=$1', [s.id]); }
+		for (const s of stale) { await q('delete from upload_stage where batch_id=$1', [s.id]); await q('delete from kalyan_stage where batch_id=$1', [s.id]); await q('delete from kalyan_customer_stage where batch_id=$1', [s.id]); }
 		for (;;) {
 			if (Date.now() > deadline - 20_000) break;
 			const b = await one<any>(`select * from upload_batches where org_id=$1 and status in ('queued','processing') and deleted_at is null order by id limit 1`, [orgId]);
@@ -151,7 +222,12 @@ export async function processBatches(orgId: number, deadline = Date.now() + 10 *
 			const started = Date.now();
 			await q(`update upload_batches set status='processing' where id=$1`, [b.id]);
 			try {
-				const finished = b.kind === 'orders' ? await processOrders(orgId, b, deadline) : await processKalyan(orgId, b, deadline);
+				let finished: boolean;
+				if (CUSTOMER_KINDS.includes(b.kind)) {
+					const res = await applyKalyanCustomers(orgId, b);
+					await q(`update upload_batches set rows_new=$2, rows_updated=$3, profile = profile || $4::jsonb where id=$1`, [b.id, res.added, res.updated, JSON.stringify(res)]);
+					finished = true;
+				} else finished = b.kind === 'orders' ? await processOrders(orgId, b, deadline) : await processKalyan(orgId, b, deadline);
 				await q(`update upload_batches set timing = jsonb_set(timing, '{ms}', to_jsonb(coalesce((timing->>'ms')::int, 0) + $2::int)) where id=$1`, [b.id, Date.now() - started]);
 				if (!finished) break;
 				await q(`update upload_batches set status='done', step='done', finished_at=now() where id=$1`, [b.id]);
@@ -178,7 +254,7 @@ export async function uploadHistory(orgId: number, qs: URLSearchParams) {
 	const to = dateOnly(qs.get('to') || '');
 	const rows = await q<any>(
 		`select * from (
-		   select 'b' || b.id as key, b.id, b.kind, b.file_name, b.file_size, b.status, b.step, b.rows_received, b.rows_total, b.rows_new, b.rows_updated, b.rows_unchanged, b.rows_rejected, b.profile, b.warnings, b.error, b.timing,
+		   select 'b' || b.id as key, b.id, b.kind, b.file_name, b.file_size, b.status, b.step, b.rows_received, b.rows_total, b.rows_new, b.rows_updated, b.rows_unchanged, b.rows_rejected, b.profile || jsonb_build_object('review', b.review), b.warnings, b.error, b.timing,
 		          b.uploaded_at, b.finished_at, u.full_name as uploaded_by, b.deleted_at, b.deleted_reason, d.full_name as deleted_by,
 		          exists (select 1 from upload_file_parts f where f.batch_id=b.id) as has_file, null::text as period_from, null::text as period_to, null::text[] as locations
 		     from upload_batches b left join users u on u.id=b.uploaded_by left join users d on d.id=b.deleted_by where b.org_id=$1
@@ -199,7 +275,7 @@ export async function uploadStatus(orgId: number, expect: Record<string, number>
 	const last = await q<any>(
 		`select kind, max(uploaded_at) as last from upload_batches where org_id=$1 and deleted_at is null and status in ('done','queued','processing') group by 1
 		 union all select scope, max(uploaded_at) from stock_uploads where org_id=$1 and deleted_at is null group by 1`, [orgId]);
-	const active = await q<any>(`select id, kind, file_name, status, step, rows_received, rows_total, error, uploaded_at from upload_batches where org_id=$1 and status in ('receiving','queued','processing') and deleted_at is null and uploaded_at > now() - interval '2 days' order by id`, [orgId]);
+	const active = await q<any>(`select id, kind, file_name, status, step, rows_received, rows_total, error, review, options, uploaded_at from upload_batches where org_id=$1 and status in ('receiving','review','queued','processing') and deleted_at is null and uploaded_at > now() - interval '7 days' order by id`, [orgId]);
 	const out: Record<string, any> = {};
 	for (const k of Object.keys(KIND_LABEL)) {
 		const l = last.find((x) => x.kind === k)?.last || null;
@@ -240,6 +316,8 @@ export async function removeBatch(orgId: number, id: number, userId: number | nu
 		const { rollupSubscribers } = await import('./kalyan');
 		await rollupSubscribers(orgId, null);
 		await q(`delete from kalyan_subscribers where org_id=$1 and dispatches = 0`, [orgId]);
+	} else if (CUSTOMER_KINDS.includes(b.kind)) {
+		throw new HttpError(400, 'Kalyan customer uploads are additive and cannot be removed. Upload a corrected file; the original file stays available for download.');
 	} else throw new HttpError(400, 'A book list or price list upload cannot be removed; upload a corrected file instead. The original file stays available for download.');
 	await q('delete from upload_stage where batch_id=$1', [id]);
 	await q('delete from kalyan_stage where batch_id=$1', [id]);

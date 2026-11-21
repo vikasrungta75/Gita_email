@@ -73,7 +73,7 @@ export async function postWebhook(kind: 'teams' | 'slack', title: string, text: 
 	return res.ok ? 'sent' : `error ${res.status}`;
 }
 
-export const appUrl = () => (process.env.APP_URL || process.env.URL || 'http://localhost:5173').replace(/\/$/, '');
+export const appUrl = () => (process.env.APP_URL || 'http://localhost:8888').replace(/\/$/, '');
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 export { esc };

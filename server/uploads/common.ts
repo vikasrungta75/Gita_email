@@ -89,7 +89,7 @@ export const DEFAULT_MAPPINGS: Mappings = {
 		CHANDIGARH: 'Chandigarh', LADAKH: 'Ladakh', NEPAL: 'Nepal', ANDAMANANDNICOBAR: 'Andaman and Nicobar', ANDAMANNICOBAR: 'Andaman and Nicobar', DAMANANDDIU: 'Dadra and Nagar Haveli and Daman and Diu', DADRAANDNAGARHAVELI: 'Dadra and Nagar Haveli and Daman and Diu',
 	},
 	languages: { bengali: 'Bangla', odia: 'Oriya', malayalam: 'Malyalam', assamese: 'Assamiya' },
-	orderStatus: { '4': 'Shipped' },
+	orderStatus: { '1': 'Order Placed', '2': 'Order Received', '3': 'In Process', '4': 'Shipped', '5': 'Delivered', '6': 'Cancelled' },
 	subperiod: { '1Y': '1 year', FY: '5 years', LM: 'Life member' },
 	dispMode: { ORDINARY: 'Ordinary post (no tracking)', REGISTERED: 'Registered post (tracked)', 'BY SHOP': 'Collected at a shop' },
 };

@@ -16,6 +16,8 @@ export interface NormalizedMessage {
 	bodyText: string;
 	sentAt: Date;
 	hasAttachments: boolean;
+	/** files attached to the message (name, type, size, the provider's id to fetch it later) */
+	attachments?: { id: string; filename: string; mimeType: string; size: number }[];
 	importance: string | null;
 	webLink: string | null;
 	folder: 'inbox' | 'sent' | 'other';

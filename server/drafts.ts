@@ -16,6 +16,9 @@ import type { MailboxRow } from './connectors/types';
 
 export const PLACEHOLDER = /\[\[\s*provide\s*:(.*?)\]\](?!\])/gis;
 export const placeholders = (body: string) => [...body.matchAll(PLACEHOLDER)].map((m) => m[1].trim());
+/** facts Gita Mail filled in from the data are marked [[ok: …]] (shown green); the marks are removed when sending */
+export const OK_MARK = /\[\[\s*ok\s*:\s?(.*?)\]\](?!\])/gis;
+export const stripOk = (body: string) => String(body || '').replace(OK_MARK, (_m, v) => String(v).trim());
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 export const bodyToHtml = (body: string) =>
@@ -82,7 +85,7 @@ export async function upsertDraft(conv: any, needsReply: boolean, body: string, 
 	);
 }
 
-const DRAFT_COLS = `d.id, d.conversation_id, d.body, d.edited, d.status, d.to_addresses, d.cc_addresses, d.subject, d.model, d.generated_at, d.updated_at,
+const DRAFT_COLS = `d.id, d.conversation_id, d.body, d.edited, d.status, d.send_at, d.attachments, d.to_addresses, d.cc_addresses, d.subject, d.model, d.generated_at, d.updated_at,
 	d.sent_at, d.last_error, d.send_mailbox_id, m.address as send_from, m.provider as send_provider,
 	c.subject as conv_subject, c.rag, c.urgency, c.sentiment, c.summary, c.last_inbound_at, c.business_category, c.subcategory, c.awaiting_reply,
 cu.name as customer_name, cu.tier as customer_tier, cu.buyer_tier, su.full_name as sent_by_name, uu.full_name as updated_by_name`;
@@ -148,6 +151,14 @@ export async function sendDraft(ctx: any, user: SessionUser, id: number, edits: 
 	const sender = await one<any>('select full_name from users where id=$1', [user.id]);
 	// the footer: logo, website and the branch address for the reader's city (or the head office)
 	const footer = await footerForConversation(user.orgId, d.conversation_id).catch(() => null);
+	const body = stripOk(d.body);
+	const attachments: { contentType: string; base64: string; filename: string }[] = [];
+	for (const a of (d.attachments || []) as any[]) {
+		if (a.kind === 'quote') {
+			const b = await one<any>('select quote_no, quote_pdf from bulk_requests where id=$1 and org_id=$2', [a.bulkId, user.orgId]);
+			if (b?.quote_pdf) attachments.push({ contentType: 'application/pdf', base64: Buffer.from(b.quote_pdf).toString('base64'), filename: `Gita-Press-Quote-${b.quote_no}.pdf` });
+		}
+	}
 	try {
 		const res = await gmailSendReply(mb, {
 			from: mb.address,
@@ -155,19 +166,21 @@ export async function sendDraft(ctx: any, user: SessionUser, id: number, edits: 
 			to: d.to_addresses,
 			cc: d.cc_addresses || [],
 			subject: d.subject,
-			text: footer ? `${d.body}\n${footer.text}` : d.body,
-			html: footer ? bodyToHtml(d.body).replace(/<\/div>$/, `${footer.html}</div>`) : bodyToHtml(d.body),
+			text: footer ? `${body}\n${footer.text}` : body,
+			html: footer ? bodyToHtml(body).replace(/<\/div>$/, `${footer.html}</div>`) : bodyToHtml(body),
+			attachments,
 			inline: footer ? [{ cid: 'gitapress-logo', contentType: 'image/png', base64: GITAPRESS_LOGO_PNG_BASE64, filename: 'gitapress-logo.png' }] : [],
 			threadId: copy?.provider_thread_id || null,
 			inReplyTo: src?.internet_message_id || null,
 			references: [src?.in_reply_to, src?.internet_message_id].filter(Boolean),
 		});
-		await q(`update reply_drafts set status='sent', sent_at=now(), sent_by=$2, provider_message_id=$3, last_error=null, updated_at=now() where id=$1`, [id, user.id, res.id]);
-		await q(`update conversations set awaiting_reply=false, status=case when status='open' then 'in_progress' else status end, updated_at=now() where id=$1`, [d.conversation_id]);
+		await q(`update reply_drafts set status='sent', body=$4, sent_at=now(), sent_by=$2, provider_message_id=$3, last_error=null, send_at=null, updated_at=now() where id=$1`, [id, user.id, res.id, body]);
+		await q(`update conversations set awaiting_reply=false, reply_status='sent', status=case when status='open' then 'in_progress' else status end, updated_at=now() where id=$1`, [d.conversation_id]);
+		await q(`update bulk_requests set stage='quote_sent', updated_at=now() where conversation_id=$1 and quote_no is not null and stage in ('received','preparing')`, [d.conversation_id]);
 		await audit(ctx, 'reply.sent', 'conversation', d.conversation_id, { draftId: id, from: mb.address, to: d.to_addresses, cc: d.cc_addresses });
 		return { success: true, mailboxId: mb.id, from: mb.address };
 	} catch (e: any) {
-		await q('update reply_drafts set last_error=$2, updated_at=now() where id=$1', [id, String(e.message).slice(0, 500)]);
+		await q(`update reply_drafts set last_error=$2, status=case when status='queued' then 'draft' else status end, send_at=null, updated_at=now() where id=$1`, [id, String(e.message).slice(0, 500)]);
 		throw new HttpError(502, e.message);
 	}
 }
@@ -191,7 +204,7 @@ export async function fillDraft(user: SessionUser, id: number, answers: { item: 
 	if (!given.length) throw new HttpError(400, 'Type at least one answer');
 	// 1. put each answer where its yellow item was
 	const used = new Set<number>();
-	let body: string = d.body.replace(PLACEHOLDER, (m: string, p: string) => {
+	let body: string = (rewrite ? stripOk(d.body) : d.body).replace(PLACEHOLDER, (m: string, p: string) => {
 		const i = given.findIndex((a) => a.item.toLowerCase() === p.trim().toLowerCase());
 		if (i < 0) return m;
 		used.add(i);

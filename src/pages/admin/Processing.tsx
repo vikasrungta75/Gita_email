@@ -47,7 +47,7 @@ export default function Processing() {
 					t.by_fallback ? <>{n(t.by_fallback)} threads were sorted by the rules engine while Claude was unavailable; recent and waiting ones are retried with Claude automatically.</> : null,
 					<>{n(t.awaiting)} threads are waiting for a reply and {n(t.drafts)} drafts are ready to check.</>,
 				]}
-				next={paused ? <>Fix the key or credit in Netlify (ANTHROPIC_API_KEY), then redeploy.</> : t.awaiting > 500 ? <>Clear old unanswered threads below so the waiting lists show current mail.</> : undefined}
+				next={paused ? <>Fix the key or credit in .env (ANTHROPIC_API_KEY), then restart Gita Mail.</> : t.awaiting > 500 ? <>Clear old unanswered threads below so the waiting lists show current mail.</> : undefined}
 			/>
 			<div className="grid g-4 mb-16">
 				<Kpi label="Emails read" value={n(e.stored)} accent={COLORS.general} foot={`${n(e.last_30_days)} in the last 30 days`} />
@@ -59,7 +59,7 @@ export default function Processing() {
 			{(paused || backfilling.length > 0 || d.ai.provider === 'heuristic') && (
 				<Card className="mb-16" accent={COLORS.amber} title="Still working">
 					<ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-						{d.ai.provider === 'heuristic' && <li>No AI key is set, so everything is analysed by the rules engine. Set <code>AI_PROVIDER=anthropic</code> and <code>ANTHROPIC_API_KEY</code> in Netlify.</li>}
+						{d.ai.provider === 'heuristic' && <li>No AI key is set, so everything is analysed by the rules engine. Set <code>AI_PROVIDER=anthropic</code> and <code>ANTHROPIC_API_KEY</code> in .env, then restart.</li>}
 						{paused && <li>Claude analysis is paused until {fmtDateTime(d.ai.paused_until)}: {d.ai.last_error}</li>}
 						{backfilling.map((m: any) => <li key={m.id}>{m.address} is still reading its first {m.backfill_days} days of history ({n(m.emails)} emails so far, oldest {fmtDate(m.oldest) || 'none yet'}).</li>)}
 					</ul>

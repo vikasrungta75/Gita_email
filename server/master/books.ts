@@ -18,6 +18,7 @@ export const STATUS_LABEL: Record<string, string> = { active: 'Active', needs_de
 export const FLAG_LABEL: Record<string, string> = {
 	no_hindi_title: 'No Hindi title', no_gitapress_link: 'No gitapress.org link', no_amazon_link: 'No Amazon link', bad_gitapress_link: 'gitapress.org link looks wrong',
 	bad_amazon_link: 'Amazon link looks wrong', shared_link: 'Link shared with another code', odd_other_names: 'Other names look wrong',
+	only_in_suchi: 'Only in the book list (Suchi)', only_in_links: 'Only in the book links file', no_price: 'No price',
 };
 
 /** Codes are text: 1, "1", "1.0" and "001" are the same book; letters are kept ("CB035"). */
@@ -183,15 +184,17 @@ export async function applyBooks(orgId: number, userId: number | null, fileName:
 				   family_manual = book_titles.family_manual or excluded.family_manual,
 				   category = coalesce(excluded.category, book_titles.category), mrp = coalesce(excluded.mrp, book_titles.mrp), lead_days = coalesce(excluded.lead_days, book_titles.lead_days),
 				   cover_days = coalesce(excluded.cover_days, book_titles.cover_days), min_print = coalesce(excluded.min_print, book_titles.min_print),
-				   status = case when $4::boolean then excluded.status when book_titles.status = 'removed' then 'removed' else 'active' end, in_master = true, updated_by = $2, updated_at = now()`,
+				   status = case when $4::boolean then excluded.status when book_titles.status = 'removed' then 'removed' else 'active' end, in_master = true, in_links = true, updated_by = $2, updated_at = now()`,
 				[orgId, userId, JSON.stringify(part.map((r) => ({
 					code: r.code, name: r.name, language: r.language, hindi: r.hindi, hindi_raw: r.hindi_raw, aliases: r.aliases, gita: r.gitapress_url, amazon: r.amazon_url, family: r.family ?? null,
 					category: r.category ?? null, mrp: r.mrp ?? null, lead: r.lead_days ?? null, cover: r.cover_days ?? null, minp: r.min_print ?? null, status: r.status ?? null,
 				}))), part.some((r) => r.status !== undefined)],
 			);
 		}
+		await c.query(`update book_titles set in_links = false where org_id=$1 and in_links and not (code = any($2::text[]))`, [orgId, rows.map((r) => r.code)]);
 		return b;
 	});
+	await q(`update book_titles set in_links = true where org_id=$1 and code = any($2::text[])`, [orgId, rows.map((r) => r.code)]);
 	const families = await autoFamilies(orgId);
 	await refreshFlags(orgId);
 	forgetStock(orgId);
@@ -201,10 +204,19 @@ export async function applyBooks(orgId: number, userId: number | null, fileName:
 
 /** Flags are worked out from the saved rows, so the filters and the Gaps list always agree with the table. */
 export async function refreshFlags(orgId: number) {
-	const rows = await q<any>(`select code, hindi_title as hindi, gitapress_url, amazon_url, aliases from book_titles where org_id=$1 and status <> 'removed'`, [orgId]);
+	const rows = await q<any>(`select code, hindi_title as hindi, gitapress_url, amazon_url, aliases, in_suchi, in_links, coalesce(suchi_price, mrp) as price from book_titles where org_id=$1 and status <> 'removed'`, [orgId]);
 	const links = new Map<string, number>();
 	for (const r of rows) for (const u of [r.gitapress_url, r.amazon_url]) if (u) links.set(u, (links.get(u) || 0) + 1);
-	const out = rows.map((r) => ({ code: r.code, flags: [...bookFlags(r), ...([r.gitapress_url, r.amazon_url].some((u) => u && links.get(u)! > 1) ? ['shared_link'] : [])] }));
+	const anySuchi = rows.some((r) => r.in_suchi);
+	const anyLinks = rows.some((r) => r.in_links);
+	const out = rows.map((r) => ({
+		code: r.code,
+		flags: [
+			...bookFlags(r), ...([r.gitapress_url, r.amazon_url].some((u) => u && links.get(u)! > 1) ? ['shared_link'] : []),
+			...(anySuchi && anyLinks && r.in_suchi && !r.in_links ? ['only_in_suchi'] : []), ...(anySuchi && anyLinks && r.in_links && !r.in_suchi ? ['only_in_links'] : []),
+			...(r.price === null || r.price === undefined ? ['no_price'] : []),
+		],
+	}));
 	for (let i = 0; i < out.length; i += 2000) {
 		await q(`update book_titles b set flags = x.flags from jsonb_to_recordset($2::jsonb) as x(code text, flags text[]) where b.org_id=$1 and b.code=x.code and b.flags is distinct from x.flags`, [orgId, JSON.stringify(out.slice(i, i + 2000))]);
 	}
@@ -246,7 +258,8 @@ export async function autoFamilies(orgId: number) {
 
 const SORTS: Record<string, string> = {
 	code: `case when b.code ~ '^\\d+$' then lpad(b.code, 10, '0') else b.code end`, name: 'lower(b.name)', language: 'b.language', hindi: 'b.hindi_title', family: 'lower(b.family)',
-	status: 'b.status', mrp: 'b.mrp', category: 'lower(b.category)', gitapress: 'b.gitapress_url', amazon: 'b.amazon_url', updated: 'b.updated_at',
+	status: 'b.status', mrp: 'coalesce(b.suchi_price, b.mrp)', price: 'coalesce(b.suchi_price, b.mrp)', category: 'lower(b.category)', gitapress: 'b.gitapress_url', amazon: 'b.amazon_url', updated: 'b.updated_at',
+	size: 'b.size_en', pages: 'b.pages', carton: 'b.carton', set: 'b.set_code', title: 'b.suchi_title',
 };
 
 export async function listBooks(orgId: number, qs: URLSearchParams) {
@@ -261,6 +274,10 @@ export async function listBooks(orgId: number, qs: URLSearchParams) {
 	if (text) { const t = p(`%${text}%`); where.push(`(b.code ilike ${t} or b.name ilike ${t} or b.hindi_title ilike ${t} or b.family ilike ${t} or array_to_string(b.aliases,' ') ilike ${t} or b.code = ${p(normCode(text))})`); }
 	if (qs.get('language')) where.push(`b.language = ${p(qs.get('language'))}`);
 	if (qs.get('family')) where.push(`b.family = ${p(qs.get('family'))}`);
+	if (qs.get('size')) where.push(`b.size_en = ${p(qs.get('size'))}`);
+	const source = qs.get('source');
+	if (source === 'suchi') where.push('b.in_suchi'); else if (source === 'links') where.push('b.in_links'); else if (source === 'both') where.push('b.in_suchi and b.in_links');
+	if (qs.get('best') === '1') where.push('b.best_seller');
 	const missing = qs.get('missing');
 	if (missing && FLAG_LABEL[missing]) where.push(`${p(missing)} = any(b.flags)`);
 	const dir = qs.get('dir') === 'desc' ? 'desc' : 'asc';
@@ -271,14 +288,17 @@ export async function listBooks(orgId: number, qs: URLSearchParams) {
 	const W = where.join(' and ');
 	const rows = await q<any>(
 		`select b.code, b.name, b.language, b.hindi_title, b.hindi_raw, b.aliases, b.gitapress_url, b.amazon_url, b.family, b.family_manual, b.status, b.category, b.mrp::float as mrp, b.lead_days, b.cover_days, b.min_print,
-		        b.in_master, b.flags, b.updated_at, u.full_name as updated_by
+		        b.in_master, b.flags, b.updated_at, u.full_name as updated_by,
+		        b.suchi_title, b.native_title, b.size_en, b.pages, b.carton, b.binding, b.best_seller, b.editions, b.set_code, b.suchi_price::float as suchi_price, b.in_suchi, b.in_links, b.edited_fields
 		   from book_titles b left join users u on u.id=b.updated_by where ${W} order by ${sort} limit ${limit} offset ${offset}`,
 		params,
 	);
 	if (all) return { rows, total: rows.length };
 	const totals = await one<any>(
 		`select count(*) filter (where status <> 'removed')::int as books, count(*) filter (where status='needs_details')::int as needs_details, count(*) filter (where status='removed')::int as removed,
-		        count(distinct family) filter (where status <> 'removed')::int as families
+		        count(distinct family) filter (where status <> 'removed')::int as families,
+		        count(*) filter (where in_suchi and status <> 'removed')::int as in_suchi, count(*) filter (where in_links and status <> 'removed')::int as in_links,
+		        count(*) filter (where in_suchi and in_links and status <> 'removed')::int as in_both
 		   from book_titles where org_id=$1`, [orgId]);
 	const flags = await q<any>(`select f as k, count(*)::int as n from book_titles b, unnest(b.flags) f where b.org_id=$1 and b.status <> 'removed' group by 1`, [orgId]);
 	const languages = await q<any>(`select language as k, count(*)::int as n from book_titles where org_id=$1 and status <> 'removed' and language <> '' group by 1 order by 2 desc`, [orgId]);
@@ -303,6 +323,11 @@ export async function saveBook(orgId: number, userId: number | null, input: any,
 		mrp: has('mrp') ? numOrNull(input.mrp, 0, 1e6) : undefined, lead_days: has('lead_days') ? numOrNull(input.lead_days, 1, 720) : undefined,
 		cover_days: has('cover_days') ? numOrNull(input.cover_days, 1, 720) : undefined, min_print: has('min_print') ? numOrNull(input.min_print, 0, 1e7) : undefined,
 		status: has('status') ? String(input.status) : undefined,
+		suchi_price: has('suchi_price') ? numOrNull(input.suchi_price, 0, 1e6) : undefined,
+		size_en: has('size_en') ? (clean(input.size_en, 20) || null) : undefined,
+		pages: has('pages') ? numOrNull(input.pages, 1, 100000) : undefined,
+		carton: has('carton') ? numOrNull(input.carton, 1, 100000) : undefined,
+		suchi_title: has('suchi_title') ? (clean(input.suchi_title, 500) || null) : undefined,
 	};
 	if (create && !next.name) throw new HttpError(400, 'A book needs an English name');
 	if (next.name === '') throw new HttpError(400, 'The English name cannot be empty');
@@ -318,6 +343,10 @@ export async function saveBook(orgId: number, userId: number | null, input: any,
 		sets.push(`${k}=$${params.length}`);
 	}
 	if (next.family !== undefined) sets.push(`family_manual=${next.family ? 'true' : 'false'}`);
+	// fields changed by hand here are kept when the next book list (Suchi) is uploaded, unless the upload says to replace them
+	const edited = ['suchi_price', 'size_en', 'pages', 'carton'].filter((k) => next[k] !== undefined);
+	if (edited.length) { params.push(edited); sets.push(`edited_fields = array(select distinct x from unnest(edited_fields || $${params.length}::text[]) x)`); }
+	if (next.suchi_price !== undefined) sets.push(`mrp = suchi_price`);
 	if (next.hindi_title !== undefined) { params.push(clean(input.hindi_title) || null); sets.push(`hindi_raw=$${params.length}`); }
 	// a book someone has completed is no longer "needs details", unless the status itself was chosen
 	if (next.status === undefined && (create || cur?.status === 'needs_details') && (next.hindi_title || next.gitapress_url || next.amazon_url || create)) sets.push(`status='active'`);
@@ -345,8 +374,11 @@ export async function exportBooks(orgId: number, qs = new URLSearchParams()): Pr
 	p.set('format', 'xlsx');
 	const { rows } = await listBooks(orgId, p);
 	return {
-		header: [...BOOK_COLUMNS, ...BOOK_EXTRA_COLUMNS],
-		rows: rows.map((r: any) => [r.code, r.name, r.language, r.hindi_raw || r.hindi_title || '', (r.aliases || []).join('; '), r.gitapress_url || '', r.amazon_url || '', r.family || '', r.category || '', r.mrp ?? '', r.lead_days ?? '', r.cover_days ?? '', r.min_print ?? '', STATUS_LABEL[r.status]]),
+		header: [...BOOK_COLUMNS, 'Suchi title', 'Size', 'Pages', 'Books per carton', 'Price', 'Best seller', 'Set code', 'Other editions', 'In Suchi', 'In links file', 'Title family', 'Status', 'Needs attention'],
+		rows: rows.map((r: any) => [r.code, r.name, r.language, r.hindi_raw || r.hindi_title || '', (r.aliases || []).join('; '), r.gitapress_url || '', r.amazon_url || '',
+			r.suchi_title || '', r.size_en || '', r.pages ?? '', r.carton ?? '', r.suchi_price ?? r.mrp ?? '', r.best_seller ? 'Yes' : '', r.set_code || '',
+			(r.editions || []).map((e: any) => `${e.language} ${e.codes.join(', ')}`).join(' · '), r.in_suchi ? 'Yes' : 'No', r.in_links ? 'Yes' : 'No', r.family || '', STATUS_LABEL[r.status],
+			(r.flags || []).map((f: string) => FLAG_LABEL[f] || f).join('; ')]),
 	};
 }
 

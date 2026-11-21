@@ -10,15 +10,7 @@ pg.types.setTypeParser(1700, (v) => parseFloat(v));
 pg.types.setTypeParser(1082, (v) => v);
 
 export function databaseUrl(): string {
-	const netlifyEnv = (globalThis as any).Netlify?.env;
-	const url =
-		process.env.DATABASE_URL ||
-		// Netlify Database (Data & Storage → Database) exposes NETLIFY_DB_URL
-		process.env.NETLIFY_DB_URL ||
-		(netlifyEnv?.get?.('NETLIFY_DB_URL') as string | undefined) ||
-		process.env.NETLIFY_DATABASE_URL ||
-		process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
-		'';
+	const url = process.env.DATABASE_URL || '';
 	if (!url) throw new Error('DATABASE_URL is not configured');
 	return url;
 }

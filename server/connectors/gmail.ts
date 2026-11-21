@@ -75,7 +75,7 @@ export function parseServiceAccount(raw: string): ServiceAccount | null {
 		return null;
 	}
 }
-// The key is normally uploaded in Mailboxes and stored encrypted in the database, because Netlify
+// The key is normally uploaded in Mailboxes and stored encrypted in the database, because some hosts
 // functions allow only 4 KB of environment variables in total. GOOGLE_SERVICE_ACCOUNT_JSON also works.
 let dbSa: { sa: ServiceAccount | null; at: number } = { sa: null, at: 0 };
 export async function loadServiceAccount(force = false) {
@@ -216,6 +216,27 @@ function extractBody(payload: any): string {
 	return plain || (html ? htmlToText(html) : '');
 }
 
+/** Files attached to a Gmail message: name, type, size and the attachment id to fetch it when opened. */
+function extractAttachments(payload: any): { id: string; filename: string; mimeType: string; size: number }[] {
+	const out: { id: string; filename: string; mimeType: string; size: number }[] = [];
+	const walk = (p: any) => {
+		if (!p) return;
+		if (p.filename && p.body?.attachmentId) out.push({ id: p.body.attachmentId, filename: String(p.filename).slice(0, 200), mimeType: p.mimeType || 'application/octet-stream', size: Number(p.body.size) || 0 });
+		(p.parts || []).forEach(walk);
+	};
+	walk(payload);
+	return out.slice(0, 20);
+}
+
+/** The bytes of one attachment (fetched only when someone opens it). */
+export async function gmailAttachment(mb: MailboxRow, messageId: string, attachmentId: string): Promise<Buffer> {
+	const tok = mb.provider === 'gmail_app' ? await delegatedToken(mb.address, GMAIL_READONLY) : await accessToken(mb);
+	const res = await fetch(`${API}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, { headers: { authorization: `Bearer ${tok}` } });
+	const data: any = await res.json().catch(() => ({}));
+	if (!res.ok) throw new Error(`Gmail attachment (${res.status}): ${data?.error?.message || res.statusText}`);
+	return Buffer.from(String(data.data || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
 export function normalizeGmail(m: any, mailbox = ''): NormalizedMessage {
 	const headers: Record<string, string> = {};
 	for (const h of m.payload?.headers || []) headers[h.name.toLowerCase()] = h.value;
@@ -239,6 +260,7 @@ export function normalizeGmail(m: any, mailbox = ''): NormalizedMessage {
 		bodyText: extractBody(m.payload),
 		sentAt: new Date(Number(m.internalDate) || headers['date'] || Date.now()),
 		hasAttachments: /"filename":"[^"]+"/.test(JSON.stringify(m.payload || {})),
+		attachments: extractAttachments(m.payload),
 		importance: headers['importance'] || null,
 		webLink: `https://mail.google.com/mail/${mailbox ? `?authuser=${encodeURIComponent(mailbox)}` : 'u/0/'}#all/${m.threadId}`,
 		folder: labels.includes('SENT') ? 'sent' : labels.includes('INBOX') ? 'inbox' : 'other',
@@ -327,6 +349,8 @@ export interface OutgoingReply {
 	references?: string[];
 	/** images referenced from the HTML as cid:… */
 	inline?: { cid: string; contentType: string; base64: string; filename: string }[];
+	/** files attached to the email (e.g. the quote PDF) */
+	attachments?: { contentType: string; base64: string; filename: string }[];
 }
 
 export function buildMime(m: OutgoingReply): string {
@@ -346,15 +370,22 @@ export function buildMime(m: OutgoingReply): string {
 		`--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', wrap76(Buffer.from(m.html).toString('base64')),
 		`--${boundary}--`,
 	];
-	if (!m.inline?.length) return [...headers, `Content-Type: multipart/alternative; boundary="${boundary}"`, '', ...alt, ''].join('\r\n');
-	// text and HTML, plus the images the HTML shows inline (the logo)
+	const files = m.attachments || [];
+	const fileParts = (b: string) => files.flatMap((f) => [`--${b}`, `Content-Type: ${f.contentType}; name="${encodeHeader(f.filename)}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${encodeHeader(f.filename)}"`, '', wrap76(f.base64)]);
+	const mixed = `mix_${boundary}`;
+	if (!m.inline?.length) {
+		if (!files.length) return [...headers, `Content-Type: multipart/alternative; boundary="${boundary}"`, '', ...alt, ''].join('\r\n');
+		return [...headers, `Content-Type: multipart/mixed; boundary="${mixed}"`, '', `--${mixed}`, `Content-Type: multipart/alternative; boundary="${boundary}"`, '', ...alt, ...fileParts(mixed), `--${mixed}--`, ''].join('\r\n');
+	}
+	// text and HTML, plus the images the HTML shows inline (the logo), plus any attached files
 	const rel = `rel_${boundary}`;
-	return [
-		...headers, `Content-Type: multipart/related; boundary="${rel}"`, '',
+	const related = [
 		`--${rel}`, `Content-Type: multipart/alternative; boundary="${boundary}"`, '', ...alt,
 		...m.inline.flatMap((f) => [`--${rel}`, `Content-Type: ${f.contentType}; name="${f.filename}"`, 'Content-Transfer-Encoding: base64', `Content-ID: <${f.cid}>`, `Content-Disposition: inline; filename="${f.filename}"`, '', wrap76(f.base64)]),
-		`--${rel}--`, '',
-	].join('\r\n');
+		`--${rel}--`,
+	];
+	if (!files.length) return [...headers, `Content-Type: multipart/related; boundary="${rel}"`, '', ...related, ''].join('\r\n');
+	return [...headers, `Content-Type: multipart/mixed; boundary="${mixed}"`, '', `--${mixed}`, `Content-Type: multipart/related; boundary="${rel}"`, '', ...related, ...fileParts(mixed), `--${mixed}--`, ''].join('\r\n');
 }
 
 /** Sends through the mailbox the customer wrote to, as a reply in the same Gmail thread. */

@@ -1,7 +1,7 @@
 /**
- * Checks that the local edition is ready to run: Node.js version, .env settings, PostgreSQL connection
+ * Checks that Gita Mail is ready to run (desktop or cloud): Node.js version, .env settings, PostgreSQL connection
  * (creates the database if it does not exist), Claude key, Google settings and the built web app.
- *   npm run local:check
+ *   npm run check
  * Exits with code 1 if anything required is wrong, and says how to fix it.
  */
 import fs from 'node:fs';
@@ -21,7 +21,7 @@ else fail('Node.js', `version ${process.versions.node} is too old. Install Node.
 // .env
 const envFile = process.env.ENV_FILE || path.resolve('.env');
 if (!fs.existsSync(envFile)) {
-	fail('.env file', `not found at ${envFile}. Copy local/env.local.template to .env and fill it in`);
+	fail('.env file', `not found at ${envFile}. Copy .env.example to .env and fill it in`);
 } else {
 	try {
 		(process as any).loadEnvFile(envFile);
@@ -35,18 +35,16 @@ const req = (k: string, why: string) => (v(k) ? true : (fail(k, `missing: ${why}
 
 req('ADMIN_EMAIL', 'the first administrator\'s email');
 if (req('ADMIN_PASSWORD', 'the first administrator\'s password') && v('ADMIN_PASSWORD').length < 10) warn('ADMIN_PASSWORD', 'shorter than 10 characters; use a stronger password');
-if (v('JWT_SECRET').length >= 32) ok('JWT_SECRET', 'set'); else fail('JWT_SECRET', v('JWT_SECRET') ? 'too short: needs 32+ characters' : 'missing: copy from Netlify, or run npm run local:keys for a fresh install');
-if (v('ENCRYPTION_KEY')) ok('ENCRYPTION_KEY', 'set (must match Netlify if you copied the cloud data)'); else fail('ENCRYPTION_KEY', 'missing: copy from Netlify, or run npm run local:keys for a fresh install');
-if (!v('INTERNAL_API_SECRET')) warn('INTERNAL_API_SECRET', 'missing; recommended (copy from Netlify)');
-if (/netlify\.app/.test(v('APP_URL'))) warn('APP_URL', 'points at Netlify; the local server will use http://localhost:' + (v('PORT') || '8888') + ' instead');
+if (v('JWT_SECRET').length >= 32) ok('JWT_SECRET', 'set'); else fail('JWT_SECRET', v('JWT_SECRET') ? 'too short: needs 32+ characters' : 'missing: run npm run keys to create one');
+if (v('ENCRYPTION_KEY')) ok('ENCRYPTION_KEY', 'set (must stay the same once mailboxes are connected)'); else fail('ENCRYPTION_KEY', 'missing: run npm run keys to create one');
 if (v('ORG_NAME')) ok('ORG_NAME', v('ORG_NAME')); else warn('ORG_NAME', 'missing; set to Gita Press, Gorakhpur');
 if (/wheel ?king/i.test(v('ORG_NAME') + v('INTERNAL_DOMAINS'))) fail('ORG_NAME / INTERNAL_DOMAINS', 'these are Wheel King values: this is the wrong env file. Use the Gita Mail one');
 
 // Database
 async function checkDb() {
-	const url = v('DATABASE_URL') || v('NETLIFY_DATABASE_URL') || v('NETLIFY_DB_URL');
+	const url = v('DATABASE_URL');
 	if (!url) return fail('DATABASE_URL', 'missing: e.g. postgres://postgres:YOUR_PASSWORD@localhost:5432/gitamail');
-	if (/neon\.tech|netlify|amazonaws|supabase/.test(url)) warn('DATABASE_URL', 'points at a cloud database, not this computer. For a fully local copy use postgres://...@localhost:5432/gitamail');
+	if (/neon\.tech|amazonaws|supabase/.test(url)) warn('DATABASE_URL', 'points at a cloud database, not this computer. For a fully local copy use postgres://...@localhost:5432/gitamail');
 	let parsed: URL;
 	try { parsed = new URL(url); } catch { return fail('DATABASE_URL', 'not a valid connection string. Special characters in the password must be encoded (@ → %40)'); }
 	const dbName = decodeURIComponent(parsed.pathname.replace(/^\//, '')) || 'postgres';
@@ -104,7 +102,7 @@ function checkGoogle() {
 // Web app build
 function checkBuild() {
 	if (fs.existsSync(path.resolve('dist/index.html'))) ok('Web app', 'built (dist/)');
-	else warn('Web app', 'not built yet: "npm run local:start" builds it');
+	else warn('Web app', 'not built yet: "npm run build" builds it');
 	if (!fs.existsSync(path.resolve('node_modules/pg'))) fail('Packages', 'not installed: run npm ci');
 }
 
@@ -114,8 +112,8 @@ checkGoogle();
 checkBuild();
 
 const icon = { ok: 'OK  ', warn: 'WARN', fail: 'FAIL' };
-console.log('\nGita Mail local check\n');
+console.log('\nGita Mail setup check\n');
 for (const r of results) console.log(`  ${icon[r.level]}  ${r.name.padEnd(28)} ${r.detail}`);
 const fails = results.filter((r) => r.level === 'fail').length;
-console.log(fails ? `\n${fails} problem(s) to fix before starting. Fix them in .env, then run npm run local:check again.\n` : '\nReady. Start with:  npm run local:start   then open ' + `http://localhost:${v('PORT') || 8888}\n`);
+console.log(fails ? `\n${fails} problem(s) to fix before starting. Fix them in .env, then run npm run check again.\n` : '\nReady. Start with:  npm run build  then  npm start   and open ' + `http://localhost:${v('PORT') || 8888}\n`);
 process.exit(fails ? 1 : 0);

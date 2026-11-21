@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["server", "netlify/functions", "scripts"]
+  "include": ["server", "scripts"]
 }

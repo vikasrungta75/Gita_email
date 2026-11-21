@@ -151,7 +151,7 @@ async function anthropicCall(body: any) {
 		if (!res.ok) {
 			const msg = data?.error?.message || 'error';
 			// a wrong or revoked key fails every call: pause and say so, instead of failing thousands of threads one by one
-			if (res.status === 401 || res.status === 403) throw new QuotaError(`Claude rejected the API key (${res.status}: ${msg}). Check ANTHROPIC_API_KEY in Netlify, then redeploy.`, 900);
+			if (res.status === 401 || res.status === 403) throw new QuotaError(`Claude rejected the API key (${res.status}: ${msg}). Check ANTHROPIC_API_KEY in .env, then restart Gita Mail.`, 900);
 			// out of credit or spend limit reached: pause instead of failing every thread
 			if (res.status === 400 && /credit balance|spend limit|billing/i.test(msg)) throw new QuotaError(`Claude: ${msg}`, 3600);
 			throw new Error(`Claude ${res.status}: ${msg}`);
@@ -247,7 +247,7 @@ async function geminiCall(opts: { system: string; prompt: string; schema?: objec
 	};
 	let { res, data } = await attempt(true);
 	if (!res.ok && res.status === 400 && opts.schema) ({ res, data } = await attempt(false));
-	if (res.status === 401 || res.status === 403) throw new QuotaError(`Gemini rejected the API key (${res.status}: ${data?.error?.message || 'error'}). Check GEMINI_API_KEY in Netlify.`, 900);
+	if (res.status === 401 || res.status === 403) throw new QuotaError(`Gemini rejected the API key (${res.status}: ${data?.error?.message || 'error'}). Check GEMINI_API_KEY in .env, then restart Gita Mail.`, 900);
 	if (!res.ok) throw new Error(`Gemini ${res.status}: ${data?.error?.message || 'error'}`);
 	const cand = data.candidates?.[0];
 	const text = (cand?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('');

@@ -101,7 +101,7 @@ export default function Mailboxes() {
 					sub="Connected automatically when you sign in with Google">
 					<div className="small muted mb-16">Each person's inbox is connected the moment they sign in with their Google Workspace account. Mail is read for analysis; replies go out only when they press Send. You, administrators and managers see its analysis. Use this button only to reconnect after an error.</div>
 					<button className="btn" disabled={!p.google || connect.isPending} onClick={() => connect.mutate('google')}><GLogo /> Reconnect my Gmail</button>
-					{!p.google && <div className="xs faint mt-8">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify first (see docs/GOOGLE_WORKSPACE_SETUP.md).</div>}
+					{!p.google && <div className="xs faint mt-8">Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env first (see docs/GOOGLE_WORKSPACE_SETUP.md).</div>}
 				</Card>
 				<Card title={<h2><span className="kw">1.</span> Workspace access for shared mailboxes</h2>} accent={COLORS.general}
 					sub="orders@, kalyan@, dispatch@… read through domain-wide delegation, set once by a Workspace administrator">
