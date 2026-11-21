@@ -1,6 +1,7 @@
 /**
  * Emails, laid out like Outlook: the list on the left, the reading pane on the right (or below, or off).
- * Tabs: All · the six groups · Bulk orders and quotes · Open questions · Not for reply.
+ * Tabs: All · the six groups · Bulk orders and quotes · Open questions · Not for reply · Waiting for AI (emails the AI
+ * has not analysed yet: they join the other tabs once it has).
  * Search, filters on every column, sorting on every column, saved views and keyboard shortcuts
  * (j / k next and previous, / search, Enter open, Esc close).
  */
@@ -33,6 +34,7 @@ export default function Emails() {
 		{ k: 'bulk', l: 'Bulk orders and quotes', n: m?.bulkOpen },
 		{ k: 'questions', l: 'Open questions', n: m?.openQuestions },
 		{ k: 'not_for_reply', l: 'Not for reply', n: count('not_for_reply') },
+		{ k: 'waiting', l: 'Waiting for AI', n: m?.waitingForAi },
 	];
 	return (
 		<>
@@ -44,7 +46,7 @@ export default function Emails() {
 					</button>
 				))}
 			</div>
-			{!m ? <Loader /> : tab === 'bulk' ? <BulkTab meta={m} /> : tab === 'questions' ? <QuestionsTab onShow={(key) => { const n = new URLSearchParams(); n.set('tab', 'all'); n.set('question', key); setSp(n); }} /> : <EmailList meta={m} tab={tab} />}
+			{!m ? <Loader /> : tab === 'waiting' ? <WaitingTab meta={m} /> : tab === 'bulk' ? <BulkTab meta={m} /> : tab === 'questions' ? <QuestionsTab onShow={(key) => { const n = new URLSearchParams(); n.set('tab', 'all'); n.set('question', key); setSp(n); }} /> : <EmailList meta={m} tab={tab} />}
 		</>
 	);
 }
@@ -293,6 +295,49 @@ function QuestionsTab({ onShow }: { onShow: (key: string) => void }) {
 					</table></div></div>
 				</div>
 			))}
+		</div>
+	);
+}
+
+/** Emails the AI has not analysed yet. They join the other tabs, with their reply, once it has. */
+function WaitingTab({ meta }: { meta: any }) {
+	const { can } = useAuth();
+	const toast = useToast();
+	const qc = useQueryClient();
+	const [q, setQ] = useState('');
+	const [open, setOpen] = useState<number | null>(null);
+	const { data, isLoading } = useQuery({ queryKey: ['emails-waiting', q], queryFn: () => api(`/emails/waiting${qs({ q })}`), refetchInterval: 30_000, placeholderData: keepPreviousData });
+	const go = useMutation({ mutationFn: () => api('/settings/ai/reanalyse', { body: {} }), onSuccess: (r: any) => { qc.invalidateQueries(); toast(`${r.queued} emails sent to the AI now`); }, onError: (e: any) => toast(e.message, 'error') });
+	const rows = data?.rows || [];
+	return (
+		<div className={`email-layout ${open ? 'pane-right has-open' : ''}`}>
+			<div className="email-list card">
+				<div className="card-head">
+					<div>
+						<h2>Waiting for AI</h2>
+						<div className="sub">{data && !data.aiOn ? <>No AI is set up, so these emails cannot be analysed: choose Gemini or Claude in <a href="/admin/settings?tab=ai">Settings → AI</a>.</>
+							: data?.paused ? 'The AI is paused (a quota or key problem); analysis continues by itself once it is available again.'
+								: 'Each email is analysed by the AI, then appears in its group with a drafted reply. Nothing here is analysed by the rules engine.'}</div>
+					</div>
+					{can('admin') && data?.aiOn && <button className="btn sm" disabled={go.isPending || !rows.length} onClick={() => go.mutate()}><MdSync /> Analyse now</button>}
+				</div>
+				<div className="card-body"><div className="data-search"><MdSearch /><input className="input sm" placeholder="Search sender or subject" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" /></div></div>
+				{isLoading ? <Loader /> : !rows.length ? <Empty text="No email is waiting: every email has been analysed by the AI." /> : (
+					<div className="table-wrap sticky"><table className="table">
+						<thead><tr><th>From</th><th>Subject</th><th>Received</th><th>Why it is waiting</th></tr></thead>
+						<tbody>{rows.map((r: any) => (
+							<tr key={r.id} className={`click ${open === r.id ? 'selected' : ''}`} onClick={() => setOpen(open === r.id ? null : r.id)}>
+								<td className="small"><b>{r.from_name || r.from_address || '–'}</b>{r.from_name && <div className="xs faint">{r.from_address}</div>}</td>
+								<td className="small">{r.subject || '(no subject)'}{r.is_automated && <span className="xs faint"> · automated</span>}<div className="xs faint truncate" style={{ maxWidth: 360 }}>{r.snippet}</div></td>
+								<td className="xs nowrap">{r.last_inbound_at ? fmtDateTime(r.last_inbound_at) : fmtDateTime(r.last_message_at)}</td>
+								<td className="xs" style={{ maxWidth: 280 }}>{r.reason || 'Waiting for the AI'}{r.tried_at && <div className="faint">last tried {ago(r.tried_at)}</div>}</td>
+							</tr>
+						))}</tbody>
+					</table></div>
+				)}
+				{data && <div className="xs faint" style={{ padding: '8px 14px' }}>{rows.length.toLocaleString('en-IN')} of {data.total.toLocaleString('en-IN')}</div>}
+			</div>
+			{open && <div className="email-pane card"><EmailPane id={open} meta={meta} onClose={() => setOpen(null)} /></div>}
 		</div>
 	);
 }

@@ -1136,4 +1136,15 @@ create table if not exists app_settings (
 alter table conversations add column if not exists ai_retry_at timestamptz;
 create index if not exists conversations_rules_idx on conversations (org_id) where analysis_model like 'remail-heuristic%';
 ` },
+{ id: '018_ai_only_remove_rules_analysis', sql: String.raw`
+-- why an email is still waiting for the AI (no AI set up, a paused quota, an error)
+alter table conversations add column if not exists analysis_pending_reason text;
+-- the rules engine is no longer used unless chosen: its analysis and the drafts built on it are removed, and those
+-- emails wait for the AI. Replies someone edited are kept.
+delete from reply_drafts d where d.status = 'draft' and not d.edited
+   and d.conversation_id in (select id from conversations where analysis_model like 'remail-heuristic%');
+update conversations set needs_analysis = true, analysis_model = null, ai_retry_at = null, needs_enrich = false,
+       analysis_pending_reason = 'Analysed by the rules engine before, now waiting for the AI'
+ where analysis_model like 'remail-heuristic%';
+` },
 ];

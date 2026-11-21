@@ -5,7 +5,7 @@ import { audit } from '../audit';
 import { requireRole } from '../auth';
 import { getOrg } from '../settings';
 import { aiConfig, describeAiConfig, loadAiConfig, saveAiConfig, testAi, MODELS } from '../ai/config';
-import { aiModel, aiProvider, clearAiPause } from '../ai/llm';
+import { aiModel, aiProvider, clearAiPause, rulesRequested } from '../ai/llm';
 import { stripOk } from '../drafts';
 import { analysisCoverage, queueRulesForAi } from '../analyze';
 import { outgoingFor, previewHtml, sampleOutgoing, signatureSettings } from '../email/signature';
@@ -14,7 +14,7 @@ export function registerAi(r: Router, deps: { kickWorker: () => Promise<unknown>
 	r.get('/api/settings/ai', async (ctx) => {
 		requireRole(ctx.user, 'admin');
 		const c = await loadAiConfig(true);
-		return { ...describeAiConfig(c), effective: { provider: aiProvider(), model: aiModel() } };
+		return { ...describeAiConfig(c), effective: { provider: aiProvider(), model: aiModel(), rules: rulesRequested() } };
 	});
 	r.put('/api/settings/ai', async (ctx) => {
 		requireRole(ctx.user, 'admin');
@@ -28,7 +28,7 @@ export function registerAi(r: Router, deps: { kickWorker: () => Promise<unknown>
 		if (aiProvider() !== 'heuristic') { await queueRulesForAi(ctx.user!.orgId); deps.kickWorker().catch(() => {}); }
 		// the keys themselves are never written to the audit log
 		await audit(ctx, 'settings.ai', null, null, { provider: c.provider, anthropicModel: c.anthropicModel, geminiModel: c.geminiModel, anthropicKey: b.anthropicKey === null ? 'removed' : b.anthropicKey ? 'changed' : undefined, geminiKey: b.geminiKey === null ? 'removed' : b.geminiKey ? 'changed' : undefined });
-		return { ...describeAiConfig(c), effective: { provider: aiProvider(), model: aiModel() } };
+		return { ...describeAiConfig(c), effective: { provider: aiProvider(), model: aiModel(), rules: rulesRequested() } };
 	});
 	r.get('/api/settings/ai/coverage', async (ctx) => {
 		requireRole(ctx.user, 'analyst');

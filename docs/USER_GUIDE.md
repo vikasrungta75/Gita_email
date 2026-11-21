@@ -3,7 +3,7 @@
 ## Emails
 
 **Tabs.** All · Book order issues · Kalyan · New order — bulk · New order — retail · International orders · Others ·
-Bulk orders and quotes · Open questions · Not for reply. The number on a tab is how many emails still need a reply.
+Bulk orders and quotes · Open questions · Not for reply · Waiting for AI (emails the AI has not analysed yet). The number on a tab is how many emails still need a reply.
 
 **The list.** Criticality, sender, subject, group and sub-tag, mailbox, completeness, reply status, received and waiting
 time. Select a heading to sort (again to reverse). Filters: reply status (Ready to send, Pending information, Sending,
@@ -129,10 +129,11 @@ Book list (Suchi: the PDF or the Excel version; check summary first) · Book lin
 * **AI** (admins): Gemini, Claude, rules only, or as in .env; the model for each (the basic one first: Gemini 3.5
   Flash-Lite, Claude Haiku 5.5); the API keys, stored encrypted and never shown again; **Test the key and model**.
   Changes apply at once, without a restart. Settings → AI takes priority over .env.
-  **Analysis by AI** shows how many threads the AI and the rules engine analysed. The rules engine is only a stand-in:
-  once an AI is set up, every thread it analysed is analysed again by the AI in the background (newest and those
-  awaiting a reply first), automated notifications too unless that is switched off. Replies someone has edited and
-  groups set by hand are kept.
+  **Email is analysed only by the AI.** Until the AI has analysed an email (no AI set up yet, a paused quota, an error)
+  it waits in **Emails → Waiting for AI** with the reason, and is not shown in the other tabs, counts or questions; it
+  joins its group with a drafted reply once analysed. The rules engine is used only if you choose **Rules only** (or
+  .env says AI_PROVIDER=heuristic). Analysis made earlier by the rules engine was removed and those emails wait for the
+  AI; replies someone had edited were kept. **Analysis by AI** shows the progress, with **Analyse the waiting emails now**.
 * **Emails**: sync window (30/60/90 days) and interval; criticality and reply targets; the facts each group needs; which
   reason belongs to which group; the Kalyan year start; the Kalyan columns kept.
 * **Pending questions**: completeness by group, the weekly completeness trend, open questions by type, answer once for

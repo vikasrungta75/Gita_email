@@ -14,8 +14,8 @@ import { COLORS, fmtDateTime } from '../../lib/format';
 const PROVIDERS = [
 	{ v: 'gemini', l: 'Gemini (Google)', d: 'Google AI Studio key. Low cost; Flash-Lite is the basic model.' },
 	{ v: 'anthropic', l: 'Claude (Anthropic)', d: 'Anthropic Console key. Strong Hindi and English writing.' },
-	{ v: 'heuristic', l: 'Rules only (no AI)', d: 'No email text leaves this server. Drafts, facts and questions still work; Rewrite properly and Mail Sage do not.' },
-	{ v: 'env', l: 'As in the .env file', d: 'Use AI_PROVIDER and the keys in .env, as before.' },
+	{ v: 'heuristic', l: 'Rules only (no AI)', d: 'Only if you choose it: the built-in rules analyse email instead of an AI. Less accurate. Rewrite properly and Mail Sage do not work.' },
+	{ v: 'env', l: 'As in the .env file', d: 'Use AI_PROVIDER and the keys in .env. The rules engine is used only if .env says AI_PROVIDER=heuristic.' },
 ];
 const NAME: Record<string, string> = { gemini: 'Gemini', anthropic: 'Claude', heuristic: 'Rules only', azure: 'Azure OpenAI', openai: 'OpenAI' };
 
@@ -29,7 +29,7 @@ export default function AiSettings() {
 	useEffect(() => { if (data) setF({ analyseAll: data.analyseAll !== false, provider: data.provider, anthropicModel: data.anthropicModel || data.env.anthropicModel || data.models.anthropic[0].id, geminiModel: data.geminiModel || data.env.geminiModel || data.models.gemini[0].id }); }, [data]);
 	const save = useMutation({
 		mutationFn: (extra: Record<string, unknown> = {}) => api('/settings/ai', { method: 'PUT', body: { ...f, anthropicKey: keys.anthropic || undefined, geminiKey: keys.gemini || undefined, ...extra } }),
-		onSuccess: (r: any) => { qc.setQueryData(['settings-ai'], r); qc.invalidateQueries({ queryKey: ['system-status'] }); setKeys({ anthropic: '', gemini: '' }); toast(`AI settings saved: ${NAME[r.effective.provider] || r.effective.provider}${r.effective.provider === 'heuristic' ? '' : ` · ${r.effective.model}`}`); },
+		onSuccess: (r: any) => { qc.setQueryData(['settings-ai'], r); qc.invalidateQueries({ queryKey: ['system-status'] }); setKeys({ anthropic: '', gemini: '' }); toast(`AI settings saved: ${r.effective.provider === 'heuristic' ? (r.effective.rules ? 'Rules only' : 'no AI yet, emails wait') : `${NAME[r.effective.provider] || r.effective.provider} · ${r.effective.model}`}`); },
 		onError: (e: any) => toast(e.message, 'error'),
 	});
 	const test = async (p: 'anthropic' | 'gemini') => {
@@ -74,7 +74,7 @@ export default function AiSettings() {
 			<Card title="AI used by Gita Mail" accent={COLORS.purple}
 				sub="Analysis of new email, Rewrite properly and Mail Sage use the AI chosen here. Changes apply at once, no restart needed. Nothing is ever sent automatically, whichever AI is chosen."
 				actions={<button className="btn primary" disabled={save.isPending || missingKey} title={missingKey ? 'Enter the key for this provider first' : undefined} onClick={() => save.mutate({})}><MdSave /> Save</button>}>
-				<div className="small mb-16">Now using: <b>{NAME[eff.provider] || eff.provider}</b>{eff.provider !== 'heuristic' && <> · <span className="mono">{eff.model}</span></>}
+				<div className="small mb-16">Now using: <b>{eff.provider === 'heuristic' ? (eff.rules ? 'Rules only (chosen)' : 'No AI yet: every email waits for the AI') : NAME[eff.provider] || eff.provider}</b>{eff.provider !== 'heuristic' && <> · <span className="mono">{eff.model}</span></>}
 					{data.updatedAt && <span className="faint"> · changed {fmtDateTime(data.updatedAt)}{data.updatedBy ? ` by ${data.updatedBy}` : ''}</span>}</div>
 				<div className="grid g-2" style={{ gap: 10 }}>
 					{PROVIDERS.map((p) => (
@@ -101,21 +101,21 @@ function Coverage() {
 	const { data } = useQuery({ queryKey: ['ai-coverage'], queryFn: () => api('/settings/ai/coverage'), refetchInterval: 15_000 });
 	const go = useMutation({ mutationFn: () => api('/settings/ai/reanalyse', { body: {} }), onSuccess: (r: any) => { qc.invalidateQueries({ queryKey: ['ai-coverage'] }); toast(`${r.queued} threads queued for the AI; they are analysed in the background, newest and those awaiting a reply first`); }, onError: (e: any) => toast(e.message, 'error') });
 	if (!data) return null;
-	const total = data.by_ai + data.by_rules;
+	const total = data.total;
 	const pct = total ? Math.round((100 * data.by_ai) / total) : 0;
 	return (
 		<Card title="Analysis by AI" accent={COLORS.teal}
-			sub="The rules engine is only a stand-in: every thread it analysed (because there was no AI key, the AI was unavailable, or it was an automated notification) is analysed again by the AI in the background. Replies someone has edited and groups set by hand are kept."
-			actions={<button className="btn sm" disabled={go.isPending || !data.aiOn || !data.waiting_for_ai} onClick={() => go.mutate()}><MdAutorenew /> {go.isPending ? 'Queuing…' : 'Analyse them with AI now'}</button>}>
+			sub={data.rules ? "The rules engine is chosen, so email is analysed by the rules. Choose Gemini or Claude above to analyse with the AI." : "Email is analysed only by the AI. Until then it waits in Emails → Waiting for AI and is not shown in the other tabs. The rules engine is used only if you choose Rules only. Replies someone has edited and groups set by hand are kept."}
+			actions={<button className="btn sm" disabled={go.isPending || !data.aiOn || data.rules || !data.waiting_for_ai} onClick={() => go.mutate()}><MdAutorenew /> {go.isPending ? 'Queuing…' : 'Analyse the waiting emails now'}</button>}>
 			<div className="row gap-16 wrap small">
-				<span><b>{total.toLocaleString('en-IN')}</b> threads analysed</span>
+				<span><b>{total.toLocaleString('en-IN')}</b> threads</span>
 				<span style={{ color: 'var(--green)' }}><b>{data.by_ai.toLocaleString('en-IN')}</b> by the AI ({pct}%)</span>
-				<span style={{ color: data.by_rules ? 'var(--amber)' : undefined }}><b>{data.by_rules.toLocaleString('en-IN')}</b> by the rules engine</span>
-				{data.new > 0 && <span><b>{data.new.toLocaleString('en-IN')}</b> new, not analysed yet</span>}
+				{data.by_rules > 0 && <span style={{ color: 'var(--amber)' }}><b>{data.by_rules.toLocaleString('en-IN')}</b> by the rules engine</span>}
+				<span><b>{data.waiting_for_ai.toLocaleString('en-IN')}</b> waiting for the AI</span>
 			</div>
 			<div className="progress mt-8" aria-label={`${pct}% analysed by AI`}><div style={{ width: `${pct}%` }} /></div>
 			<div className="xs faint mt-8">
-				{!data.aiOn ? 'No AI is set up, so nothing can be analysed again yet: choose Gemini or Claude above and save its key.'
+				{data.rules ? 'Rules only is chosen.' : !data.aiOn ? 'No AI is set up, so every email waits: choose Gemini or Claude above and save its key.'
 					: data.paused ? 'The AI is paused (a quota or key problem); analysis continues by itself once it is available again.'
 						: data.waiting_for_ai ? `${data.waiting_for_ai.toLocaleString('en-IN')} waiting for the AI${data.retry_later ? `, ${data.retry_later.toLocaleString('en-IN')} of them tried in the last 30 minutes and retried later` : ''}. They are worked through in the background, newest and those awaiting a reply first.`
 							: 'Every thread has been analysed by the AI.'}

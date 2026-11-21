@@ -104,6 +104,10 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 				{onClose && <button className="btn ghost icon sm" aria-label="Close" onClick={onClose}><MdCancel /></button>}
 			</div>
 
+			{data.ready === false && (
+				<div className="pane-note waiting-note"><b>Waiting for the AI.</b> {(c.analysis_pending_reason || 'This email has not been analysed by the AI yet').replace(/\.?$/, '.')} Its group, facts and reply appear once it has been analysed.</div>
+			)}
+			{data.ready !== false && <>
 			<div className="pane-tags">
 				<select className="input sm" disabled={!analyst} value={c.primary_group || ''} onChange={(e) => tag.mutate({ primary_group: e.target.value, sub_tags: [] })} aria-label="Group">
 					{groups.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
@@ -201,6 +205,8 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 							)}
 						</div>
 					)}
+
+			</>}
 
 			{/* 4. the whole mail trail, newest first */}
 			<MailTrail emails={data.emails} isBulk={c.primary_group === 'bulk_order' && !!data.bulk} bulkId={data.bulk?.id} onErr={err} />
