@@ -2586,3 +2586,9 @@ input[type='range'] { accent-color: #2563EB; }
 .email-preview { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; max-height: 60vh; overflow: auto; }
 .choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: #fff;
 	input { margin-top: 3px; } &.on { border-color: #6366F1; background: #EEF2FF; } }
+
+// ── mail trail in the reading pane ──
+.trail-head { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px; }
+.pane-msg.answering { box-shadow: inset 3px 0 0 #6366F1; }
+.pane-msg .msg-body.folded { max-height: 320px; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
+.badge.on { background: #EEF2FF; color: #3730A3; }

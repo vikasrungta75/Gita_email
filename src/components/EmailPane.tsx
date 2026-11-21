@@ -1,5 +1,6 @@
 /**
- * The reading pane: questions at the top, the original email with attachments, the facts found, and the reply
+ * The reading pane: questions at the top, the facts found, the reply to be sent, then every email in the trail
+ * (newest first, the one being answered marked), with attachments
  * draft with found facts in green and missing ones in yellow. Rewrite properly (AI, side by side), Send (30-second
  * undo) and Send later. Bulk orders get the quote builder. Nothing is ever sent without a person pressing Send.
  */
@@ -62,7 +63,6 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 	const [later, setLater] = useState(false);
 	const [asSent, setAsSent] = useState(false);
 	const [laterAt, setLaterAt] = useState('');
-	const [showAll, setShowAll] = useState(false);
 	const editor = useRef<HTMLTextAreaElement>(null);
 
 	const answer = useMutation({ mutationFn: () => api(`/emails/${id}/answers`, { body: { answers: Object.entries(answers).filter(([, a]) => a.value.trim()).map(([key, a]) => ({ key, ...a })) } }), onSuccess: (r: any) => { setAnswers({}); refresh(); toast(r.standing ? `Saved, and kept as a standing answer for every email that asks (${r.standing})` : 'Answer added to the reply'); }, onError: err });
@@ -91,7 +91,6 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 	const missing = useMemo(() => (draft?.body || '').match(/\[\[\s*provide\s*:/gi)?.length || 0, [draft?.body]);
 	if (isLoading || !c) return <div className="pane"><Loader /></div>;
 	const inbound = data.emails.filter((e: any) => e.direction === 'inbound');
-	const shown = showAll ? data.emails : data.emails.slice(-2);
 	const secs = draft?.send_at ? Math.max(0, Math.round((new Date(draft.send_at).getTime() - now) / 1000)) : 0;
 	const analyst = can('analyst');
 
@@ -144,28 +143,6 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 					{analyst && <button className="btn sm primary" disabled={answer.isPending || !Object.values(answers).some((a) => a.value.trim())} onClick={() => answer.mutate()}><MdCheckCircle /> {answer.isPending ? 'Saving…' : 'Add answers to the reply'}</button>}
 				</div>
 			)}
-
-			{/* 2. the original email */}
-			<div className="pane-thread">
-				{data.emails.length > 2 && <button className="btn ghost sm" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show the latest only' : `Show all ${data.emails.length} messages`}</button>}
-				{shown.map((e: any) => (
-					<div key={e.id} className={`pane-msg ${e.direction}`}>
-						<div className="xs faint">{e.direction === 'inbound' ? <b>{e.from_name || e.from_address}</b> : <b>Gita Press ({e.from_address})</b>} · {fmtDateTime(e.sent_at)} · {e.mailbox}</div>
-						<div className="msg-body">{e.body_clean || e.body_text}</div>
-						{(e.attachments || []).length > 0 && (
-							<div className="attachments">
-								{e.attachments.map((a: any, i: number) => (
-									<span key={i} className="attachment">
-										<MdAttachFile /> <button className="link-btn" onClick={() => openFile(`/emails/attachment/${e.id}/${i}`).catch(err)}>{a.filename}</button>
-										<span className="xs faint"> {Math.round((a.size || 0) / 1024)} KB</span>
-										{c.primary_group === 'bulk_order' && /sheet|excel|csv|pdf/i.test(`${a.mimeType} ${a.filename}`) && data.bulk && <ReadCodes emailId={e.id} idx={i} bulkId={data.bulk.id} />}
-									</span>
-								))}
-							</div>
-						)}
-					</div>
-				))}
-			</div>
 
 			{/* facts found and missing */}
 			{facts.length > 0 && (
@@ -224,6 +201,9 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 							)}
 						</div>
 					)}
+
+			{/* 4. the whole mail trail, newest first */}
+			<MailTrail emails={data.emails} isBulk={c.primary_group === 'bulk_order' && !!data.bulk} bulkId={data.bulk?.id} onErr={err} />
 
 			{asSent && draft && <SentPreview draftId={draft.id} onClose={() => setAsSent(false)} />}
 			{rewrite && (
@@ -316,5 +296,56 @@ function SentPreview({ draftId, onClose }: { draftId: number; onClose: () => voi
 			<div className="xs faint mb-8">Yellow items are shown as they are; answer them before sending.</div>
 			<div className="email-preview">{isLoading ? <Loader /> : error ? <div className="small" style={{ color: 'var(--red)' }}>{(error as any).message}</div> : <div dangerouslySetInnerHTML={{ __html: data.html }} />}</div>
 		</Modal>
+	);
+}
+
+/** Every email in the thread, newest first: the reader's emails, Gita Press replies (also those sent from Gita Mail and
+ * not yet synced) and internal notes. The email being answered is marked. Long emails are folded; the quoted text of
+ * earlier messages is hidden unless asked for. */
+function MailTrail({ emails, isBulk, bulkId, onErr }: { emails: any[]; isBulk: boolean; bulkId?: number; onErr: (e: any) => void }) {
+	const list = [...emails].reverse();
+	const answering = list.find((e) => e.direction === 'inbound')?.id;
+	return (
+		<div className="pane-thread">
+			<div className="trail-head"><b>Mail trail</b> <span className="xs faint">{list.length} email{list.length === 1 ? '' : 's'}, newest first</span></div>
+			{list.map((e) => <TrailMessage key={e.id} e={e} answering={e.id === answering} isBulk={isBulk} bulkId={bulkId} onErr={onErr} />)}
+		</div>
+	);
+}
+
+function TrailMessage({ e, answering, isBulk, bulkId, onErr }: { e: any; answering: boolean; isBulk: boolean; bulkId?: number; onErr: (e: any) => void }) {
+	const [full, setFull] = useState(false);
+	const [open, setOpen] = useState(false);
+	const clean = (e.body_clean || e.body_text || '').trim();
+	const text = full ? (e.body_text || clean) : clean;
+	const long = text.length > 1400 || text.split('\n').length > 22;
+	const who = e.direction === 'inbound' ? (e.from_name || e.from_address) : e.direction === 'internal' ? `${e.from_name || e.from_address} (internal)` : e.from_app ? e.from_name : `Gita Press (${e.from_address})`;
+	return (
+		<div className={`pane-msg ${e.direction} ${answering ? 'answering' : ''}`}>
+			<div className="row-between gap-8">
+				<div className="xs faint">
+					<b>{who}</b>{e.direction === 'inbound' && e.from_name ? ` <${e.from_address}>` : ''} · {fmtDateTime(e.sent_at)}{e.mailbox ? ` · ${e.mailbox}` : ''}
+					{(e.to_addresses || []).length > 0 && <div>to {(e.to_addresses || []).join(', ')}{(e.cc_addresses || []).length ? ` · cc ${e.cc_addresses.join(', ')}` : ''}</div>}
+				</div>
+				<div className="row gap-4 nowrap">
+					{answering && <span className="badge on">Replying to this</span>}
+					{e.direction === 'outbound' && <span className="badge">{e.from_app ? 'Sent from Gita Mail' : 'Reply sent'}</span>}
+					{e.body_text && e.body_clean && e.body_text.trim() !== e.body_clean.trim() && <button className="btn ghost sm" onClick={() => setFull(!full)}>{full ? 'Hide quoted text' : 'Show quoted text'}</button>}
+				</div>
+			</div>
+			<div className={`msg-body ${long && !open ? 'folded' : ''}`}>{text || <span className="faint">(no text)</span>}</div>
+			{long && <button className="btn ghost sm" onClick={() => setOpen(!open)}>{open ? 'Show less' : 'Show the whole email'}</button>}
+			{(e.attachments || []).length > 0 && (
+				<div className="attachments">
+					{e.attachments.map((a: any, i: number) => (
+						<span key={i} className="attachment">
+							<MdAttachFile /> <button className="link-btn" onClick={() => openFile(`/emails/attachment/${e.id}/${i}`).catch(onErr)}>{a.filename}</button>
+							<span className="xs faint"> {Math.round((a.size || 0) / 1024)} KB</span>
+							{isBulk && bulkId && /sheet|excel|csv|pdf/i.test(`${a.mimeType} ${a.filename}`) && <ReadCodes emailId={e.id} idx={i} bulkId={bulkId} />}
+						</span>
+					))}
+				</div>
+			)}
+		</div>
 	);
 }

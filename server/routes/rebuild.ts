@@ -124,6 +124,17 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		const emails = await q<any>(
 			`select e.id, e.direction, e.from_address, e.from_name, e.to_addresses, e.cc_addresses, e.subject, e.body_clean, e.body_text, e.sent_at, e.has_attachments, e.attachments, e.web_link, m.address as mailbox
 			   from emails e left join mailboxes m on m.id=e.mailbox_id where e.conversation_id=$1 and not e.is_duplicate order by e.sent_at`, [id]);
+		// replies sent from Gita Mail that Gmail has not synced back yet, so the trail is complete
+		const sent = await q<any>(
+			`select d.id, d.body, d.sent_at, d.to_addresses, d.cc_addresses, d.subject, m.address as mailbox, u.full_name as sent_by
+			   from reply_drafts d left join mailboxes m on m.id=d.send_mailbox_id left join users u on u.id=d.sent_by
+			  where d.conversation_id=$1 and d.status='sent' and d.sent_at is not null
+			    and not exists (select 1 from emails e where e.conversation_id=d.conversation_id and e.provider_message_id=d.provider_message_id)`, [id]);
+		for (const d of sent) {
+			emails.push({ id: `sent-${d.id}`, direction: 'outbound', from_address: d.mailbox, from_name: d.sent_by ? `${d.sent_by} (Gita Mail)` : 'Gita Mail', to_addresses: d.to_addresses, cc_addresses: d.cc_addresses,
+				subject: d.subject, body_clean: d.body, body_text: d.body, sent_at: d.sent_at, has_attachments: false, attachments: [], mailbox: d.mailbox, from_app: true });
+		}
+		emails.sort((a: any, b: any) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
 		const mailboxes = await q<any>('select address from mailboxes where id = any($1::bigint[])', [c.mailbox_ids]);
 		const draft = await getDraftForConversation(id, ctx.user!.orgId);
 		const bulk = await one<any>('select id, stage, items, totals, value, quote_no, quote_at, notes, updated_at from bulk_requests where conversation_id=$1', [id]);
