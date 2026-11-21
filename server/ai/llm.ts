@@ -25,7 +25,7 @@ export function aiProvider(): Provider {
 
 export function aiModel(): string {
 	switch (aiProvider()) {
-		case 'gemini': return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+		case 'gemini': return process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 		case 'anthropic': return process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
 		case 'azure': return process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini';
 		case 'openai': return process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -203,6 +203,9 @@ async function pace() {
 	lastAiCall = Date.now();
 }
 
+/** Gemini 1.x and 2.x still take a temperature; Gemini 3 and later do not. */
+export const geminiLegacy = (model: string) => /^(models\/)?gemini-[12](\.|-)/.test(model);
+
 async function geminiCall(opts: { system: string; prompt: string; schema?: object; maxTokens?: number }) {
 	await pace();
 	const model = aiModel();
@@ -211,7 +214,8 @@ async function geminiCall(opts: { system: string; prompt: string; schema?: objec
 		systemInstruction: { parts: [{ text: opts.system }] },
 		contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
 		generationConfig: {
-			temperature: 0.1,
+			// Gemini 3 and later reject sampling settings (temperature, top_p, top_k); older models accept them
+			...(geminiLegacy(model) ? { temperature: 0.1 } : {}),
 			maxOutputTokens: opts.maxTokens || 4096,
 			...(opts.schema ? { responseMimeType: 'application/json' } : {}),
 		},

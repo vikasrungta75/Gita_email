@@ -86,6 +86,17 @@ async function checkAi() {
 			else if (res.status === 401 || res.status === 403) fail('Claude', 'key rejected (401/403). Create a new key at console.anthropic.com and paste it with no spaces or quotes');
 			else warn('Claude', `could not confirm the key (HTTP ${res.status}); check your internet connection`);
 		} catch (e: any) { warn('Claude', `could not reach Anthropic: ${e.message}`); }
+	} else if (provider === 'gemini') {
+		const key = v('GEMINI_API_KEY') || v('GOOGLE_API_KEY');
+		const model = v('GEMINI_MODEL') || 'gemini-3.5-flash-lite';
+		if (!key) return fail('GEMINI_API_KEY', 'AI_PROVIDER is gemini but the key is missing. Create one at aistudio.google.com → Get API key');
+		try {
+			const res = await fetch(`${(v('GEMINI_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '')}/models/${encodeURIComponent(model)}`, { headers: { 'x-goog-api-key': key }, signal: AbortSignal.timeout(10000) });
+			if (res.ok) ok('Gemini', `key accepted; model ${model}`);
+			else if (res.status === 404) fail('Gemini', `model "${model}" not found. Check GEMINI_MODEL (e.g. gemini-3.5-flash-lite)`);
+			else if (res.status === 400 || res.status === 401 || res.status === 403) fail('Gemini', `key rejected (${res.status}). Create a new key at aistudio.google.com and paste it with no spaces or quotes`);
+			else warn('Gemini', `could not confirm the key (HTTP ${res.status}); check your internet connection`);
+		} catch (e: any) { warn('Gemini', `could not reach Google: ${e.message}`); }
 	} else ok('AI', `provider ${provider}`);
 }
 
