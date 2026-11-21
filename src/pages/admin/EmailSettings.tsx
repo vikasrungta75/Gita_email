@@ -1,7 +1,7 @@
 /**
  * Settings for emails: sync window, groups and criticality, SLA, the facts a complete reply needs, which reason
  * belongs to which group, the Kalyan year; Pending questions with the completeness summary and weekly trend;
- * Auto-send (defined for later, cannot be switched on); and "Delete everything and rebuild".
+ * Auto-send (defined for later, cannot be switched on); and "Delete emails" (AI-analysed, not AI-analysed, or both).
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -145,26 +145,51 @@ export function AutoSend() {
 	);
 }
 
-export function ResetCard() {
+const WHICH = [
+	{ v: 'ai', l: 'Emails analysed by the AI', d: 'Every email the AI has analysed, with its reply drafts. Replies already sent stay in Gmail.' },
+	{ v: 'not_ai', l: 'Emails not analysed by the AI', d: 'Emails the rules engine analysed earlier, and emails still waiting for the AI (not shown in Emails).' },
+	{ v: 'both', l: 'Both', d: 'Every email in Gita Mail.' },
+] as const;
+
+/** Settings → System status (admins): delete emails, either the ones the AI analysed or the ones it did not, or both. */
+export function DeleteEmailsCard() {
 	const toast = useToast();
 	const qc = useQueryClient();
 	const [open, setOpen] = useState(false);
+	const [which, setWhich] = useState<'ai' | 'not_ai' | 'both'>('not_ai');
+	const [readAgain, setReadAgain] = useState(false);
 	const [typed, setTyped] = useState('');
 	const [haveBackup, setHaveBackup] = useState(false);
-	const pre = useQuery({ queryKey: ['reset-preview'], queryFn: () => api('/system/reset'), enabled: open });
-	const go = useMutation({ mutationFn: () => api('/system/reset', { body: { confirm: typed, haveBackup } }), onSuccess: (r: any) => { setOpen(false); setTyped(''); qc.invalidateQueries(); toast(`Everything deleted${r.backup ? `; backup saved at ${r.backup}` : ''}. Mail is being read again.`); }, onError: (e: any) => toast(e.message, 'error') });
+	const pre = useQuery({ queryKey: ['delete-emails-preview'], queryFn: () => api('/system/delete-emails'), enabled: open });
+	const go = useMutation({
+		mutationFn: () => api('/system/delete-emails', { body: { which, confirm: typed, haveBackup, readAgain } }),
+		onSuccess: (r: any) => { setOpen(false); setTyped(''); qc.invalidateQueries(); toast(`${num(r.emails)} emails in ${num(r.threads)} threads deleted${r.backup ? `; backup saved at ${r.backup}` : ''}${r.readAgain ? '. The mailboxes are being read again.' : ''}`); },
+		onError: (e: any) => toast(e.message, 'error'),
+	});
+	const sum = (k: string) => (k === 'both' ? ['ai', 'not_ai'] : [k]).reduce((a, x) => ({ threads: a.threads + (pre.data?.[x]?.threads || 0), emails: a.emails + (pre.data?.[x]?.emails || 0), replies: a.replies + (pre.data?.[x]?.replies || 0), bulk: a.bulk + (pre.data?.[x]?.bulk || 0) }), { threads: 0, emails: 0, replies: 0, bulk: 0 });
+	const chosen = sum(which);
 	return (
-		<Card title="Delete everything and rebuild" accent={COLORS.red}
-			sub="Deletes every email, reply, customer, stock and tracking upload, and the book list and links, then reads the mailboxes again. Master data (locations, delivery partners, Kalyan types and modes, bank, discount, freight), rules, standing answers, templates, users and settings are kept. A backup is taken first.">
-			<button className="btn" style={{ color: 'var(--red)' }} onClick={() => setOpen(true)}><MdDeleteForever /> Delete everything and rebuild…</button>
+		<Card title="Delete emails" accent={COLORS.red}
+			sub="Deletes emails from Gita Mail only (they stay in Gmail): the ones the AI analysed, the ones it did not, or both. Nothing else is deleted: master data, stock, tracking, customers, settings and mailboxes are kept. A backup is taken first.">
+			<button className="btn" style={{ color: 'var(--red)' }} onClick={() => setOpen(true)}><MdDeleteForever /> Delete emails…</button>
 			{open && (
-				<Modal title="Delete everything and rebuild?" onClose={() => setOpen(false)}
-					footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button><button className="btn primary" style={{ background: 'var(--red)' }} disabled={typed !== 'DELETE' || go.isPending} onClick={() => go.mutate()}>{go.isPending ? 'Backing up and deleting…' : 'Delete and rebuild'}</button></>}>
+				<Modal title="Delete emails" onClose={() => setOpen(false)}
+					footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button><button className="btn primary" style={{ background: 'var(--red)' }} disabled={typed !== 'DELETE' || go.isPending || !chosen.threads} onClick={() => go.mutate()}>{go.isPending ? 'Backing up and deleting…' : `Delete ${num(chosen.emails)} emails`}</button></>}>
 					{!pre.data ? <Loader /> : <>
-						<div className="small"><b>Will be deleted:</b></div>
-						<ul className="small">{Object.entries(pre.data.delete).map(([k, n]) => <li key={k}>{k}: {num(n as number)}</li>)}</ul>
-						<div className="small"><b>Kept:</b> {pre.data.keep.join(' · ')}</div>
-						<label className="small row gap-4 mt-16"><input type="checkbox" checked={haveBackup} onChange={(e) => setHaveBackup(e.target.checked)} /> I have a backup (only needed if the automatic backup cannot be made)</label>
+						<div className="col gap-8">
+							{WHICH.map((w) => {
+								const n = sum(w.v);
+								return (
+									<label key={w.v} className={`choice ${which === w.v ? 'on' : ''}`}>
+										<input type="radio" name="delete-which" checked={which === w.v} onChange={() => setWhich(w.v)} />
+										<span><b>{w.l}</b>: {num(n.emails)} emails in {num(n.threads)} threads{n.replies ? `, ${num(n.replies)} unsent replies` : ''}{n.bulk ? `, ${num(n.bulk)} bulk requests` : ''}<br /><span className="xs faint">{w.d}</span></span>
+									</label>
+								);
+							})}
+						</div>
+						<div className="small mt-16"><b>Kept:</b> {pre.data.keep.join(' · ')}</div>
+						<label className="small row gap-4 mt-16"><input type="checkbox" checked={readAgain} onChange={(e) => setReadAgain(e.target.checked)} /> Read the mailboxes again afterwards, so the deleted emails come back from Gmail and are analysed by the AI afresh</label>
+						<label className="small row gap-4 mt-8"><input type="checkbox" checked={haveBackup} onChange={(e) => setHaveBackup(e.target.checked)} /> I have a backup (only needed if the automatic backup cannot be made)</label>
 						<div className="field mt-8"><label>Type DELETE to confirm</label><input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} /></div>
 					</>}
 				</Modal>

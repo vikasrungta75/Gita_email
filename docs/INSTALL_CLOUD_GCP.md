@@ -40,7 +40,7 @@ It prints the IP address at the end.
 3. **Settings**: `sudo nano /opt/gitamail/.env` → add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (redirect URIs for your
    domain, see [GOOGLE_WORKSPACE_SETUP.md](GOOGLE_WORKSPACE_SETUP.md)) and optional `ANTHROPIC_API_KEY`; then
    `sudo systemctl restart gitamail`.
-4. Open `https://mail.gitapress.org`, sign in, add the mailboxes, run **Delete everything and rebuild** once, and upload the
+4. Open `https://mail.gitapress.org`, sign in, add the mailboxes, set up the AI in **Settings → AI**, and upload the
    data (same as steps 4–6 of the desktop guide).
 
 ## Update to the latest code

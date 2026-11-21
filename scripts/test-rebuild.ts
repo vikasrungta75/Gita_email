@@ -1,9 +1,11 @@
 /**
  * Tests for the rebuild: pricing rules, the book list (Suchi), Kalyan customer uploads, email classification,
  * facts, questions and completeness, standing answers, the send queue (never automatic), bulk quotes and
- * "delete everything and rebuild". Needs DATABASE_URL to a test database: npm test
+ * "delete emails". Needs DATABASE_URL to a test database: npm test
  */
 import assert from 'node:assert/strict';
+// the tests drive analysis themselves; the background worker would race them
+process.env.WORKER = 'false';
 import fs from 'node:fs';
 import { ensureSchema, getPool, one, q } from '../server/db';
 import { defaultOrgId, issueSession } from '../server/auth';
@@ -291,7 +293,7 @@ const bdr = await draftOf(cBulk.id);
 assert.ok(bdr.attachments.some((a: any) => a.kind === 'quote'), 'quote PDF attached to the reply');
 assert.match(bdr.body, new RegExp(quote.quoteNo));
 
-// ── API: delete everything and rebuild keeps master data ──
+// ── API ──
 const { token } = await issueSession(admin.id, { ip: '', ua: 'test' } as any);
 const call = async (method: string, path: string, body?: any) => {
 	const res = await handle(new Request(`http://x${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }));
@@ -485,6 +487,7 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 // ── the mail trail includes replies sent from Gita Mail that Gmail has not synced back yet, once ──
 {
 	const conv = await one<any>("select c.id, (select mailbox_id from emails e where e.conversation_id=c.id limit 1) as mb from conversations c where c.org_id=$1 and c.message_count > 0 order by c.id limit 1", [orgId]);
+	await q("update conversations set needs_analysis=false, analysis_model='gemini-3.5-flash-lite' where id=$1", [conv.id]);
 	const d = await one<any>(`insert into reply_drafts (org_id, conversation_id, body, generated_body, status, sent_at, provider_message_id, send_mailbox_id, to_addresses, subject)
 		values ($1, $2, 'Dear reader,\nYour books were sent.\nRegards', '', 'sent', now(), 'trail-test-1', $3, '{reader@example.com}', 'Re: test') returning id`, [orgId, conv.id, conv.mb]);
 	const t1 = await call('GET', `/api/emails/${conv.id}`);
@@ -530,12 +533,14 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 		const listNone = await call('GET', '/api/emails?tab=all&showSent=1');
 		assert.equal(listNone.data.total, 0, 'waiting emails are not in the Emails tabs');
 		const metaNone = await call('GET', '/api/emails/meta');
-		assert.equal(metaNone.data.counts.length, 0, 'nor in the counts'); assert.ok(metaNone.data.waitingForAi > 0);
-		const waitList = await call('GET', '/api/emails/waiting');
-		assert.equal(waitList.status, 200); assert.equal(waitList.data.total, metaNone.data.waitingForAi);
-		assert.match(waitList.data.rows[0].reason, /No AI is set up/);
-		const one1 = await call('GET', `/api/emails/${waitList.data.rows[0].id}`);
-		assert.equal(one1.data.ready, false); assert.equal(one1.data.draft, null, 'no reply is offered before the AI');
+		assert.equal(metaNone.data.counts.length, 0, 'nor in the counts'); assert.equal(metaNone.data.waitingForAi, undefined, 'no waiting tab');
+		assert.equal((await call('GET', '/api/emails/waiting')).status, 404, 'no list of waiting emails in Emails');
+		const waitingOne = await one<any>("select id, analysis_pending_reason from conversations where org_id=$1 and needs_analysis order by id limit 1", [orgId]);
+		assert.match(waitingOne.analysis_pending_reason, /No AI is set up/);
+		const one1 = await call('GET', `/api/emails/${waitingOne.id}`);
+		assert.equal(one1.status, 404, 'a waiting email cannot be opened'); assert.match(one1.data.error, /not been analysed by the AI/);
+		const covNone = await call('GET', '/api/settings/ai/coverage');
+		assert.ok(covNone.data.waiting_for_ai > 0, 'Settings → AI shows how many are waiting');
 
 		// the AI fails: still waiting (not rules), tried again later (failing before saving: saving starts the worker)
 		fail = true;
@@ -555,9 +560,9 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 		await enrichPending(orgId);
 		const listAi = await call('GET', '/api/emails?tab=all&showSent=1');
 		assert.ok(listAi.data.total > 0, 'analysed by the AI: shown');
-		assert.equal((await call('GET', '/api/emails/waiting')).data.total, 0, 'nothing waiting');
+		assert.equal((await call('GET', '/api/settings/ai/coverage')).data.waiting_for_ai, 0, 'nothing waiting');
 		const shown = await call('GET', `/api/emails/${listAi.data.rows[0].id}`);
-		assert.equal(shown.data.ready, true);
+		assert.equal(shown.status, 200); assert.equal(shown.data.ready, true);
 		// Rules only, when chosen, works as before
 		await call('PUT', '/api/settings/ai', { provider: 'heuristic' });
 		assert.equal(rulesRequested(), true);
@@ -568,19 +573,36 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 		await q("update ai_state set paused_until=null where id=1").catch(() => {});
 	}
 }
-const before = await call('GET', '/api/system/reset');
-assert.ok(before.data.delete.Emails > 0);
-assert.equal((await call('POST', '/api/system/reset', { confirm: 'NO' })).status, 400);
-const reset = await call('POST', '/api/system/reset', { confirm: 'DELETE', haveBackup: true, sync: false });
-assert.equal(reset.status, 200, JSON.stringify(reset.data));
-assert.equal((await one<any>('select count(*)::int n from emails where org_id=$1', [orgId])).n, 0);
-assert.equal((await one<any>('select count(*)::int n from kalyan_customers where org_id=$1', [orgId])).n, 0);
-assert.equal((await one<any>('select count(*)::int n from book_titles where org_id=$1', [orgId])).n, 0);
-assert.equal((await one<any>('select count(*)::int n from orders where org_id=$1', [orgId])).n, 0);
-assert.ok((await one<any>('select count(*)::int n from standing_answers where org_id=$1', [orgId])).n >= 1, 'standing answers kept');
-assert.ok((await one<any>('select count(*)::int n from master_history where org_id=$1', [orgId])).n >= 1, 'master data kept');
-assert.ok((await one<any>('select count(*)::int n from mailboxes where org_id=$1', [orgId])).n >= 1, 'mailboxes kept');
-assert.ok((await one<any>('select count(*)::int n from reply_templates where org_id=$1', [orgId])).n >= 1, 'templates kept');
+// ── Delete emails: AI-analysed, not AI-analysed, or both; nothing else is touched ──
+{
+	const convs = await q<any>('select id from conversations where org_id=$1 and message_count > 0 order by id', [orgId]);
+	assert.ok(convs.length >= 3);
+	await q("update conversations set analysis_model='gemini-3.5-flash-lite', needs_analysis=false where id = any($1)", [convs.slice(0, 2).map((c: any) => c.id)]);
+	await q("update conversations set analysis_model=null, needs_analysis=true where org_id=$1 and not (id = any($2))", [orgId, convs.slice(0, 2).map((c: any) => c.id)]);
+	const allThreads = (await one<any>('select count(*)::int n from conversations where org_id=$1', [orgId])).n;
+	const counts = await call('GET', '/api/system/delete-emails');
+	assert.equal(counts.status, 200); assert.equal(counts.data.ai.threads, 2); assert.equal(counts.data.not_ai.threads, allThreads - 2);
+	const keep = { kc: (await one<any>('select count(*)::int n from kalyan_customers where org_id=$1', [orgId])).n, bt: (await one<any>('select count(*)::int n from book_titles where org_id=$1', [orgId])).n,
+		or: (await one<any>('select count(*)::int n from orders where org_id=$1', [orgId])).n, st: (await one<any>('select count(*)::int n from stock_uploads where org_id=$1', [orgId])).n };
+	assert.equal((await call('POST', '/api/system/delete-emails', { which: 'not_ai', confirm: 'NO' })).status, 400, 'DELETE must be typed');
+	assert.equal((await call('POST', '/api/system/delete-emails', { which: 'everything', confirm: 'DELETE' })).status, 400, 'only the two parts');
+	const d1 = await call('POST', '/api/system/delete-emails', { which: 'not_ai', confirm: 'DELETE', haveBackup: true });
+	assert.equal(d1.status, 200, JSON.stringify(d1.data)); assert.equal(d1.data.threads, allThreads - 2);
+	assert.equal((await one<any>('select count(*)::int n from conversations where org_id=$1', [orgId])).n, 2, 'the AI-analysed emails stay');
+	assert.equal((await one<any>('select count(*)::int n from emails where org_id=$1 and conversation_id is null', [orgId])).n, 0, 'no orphaned emails');
+	const d2 = await call('POST', '/api/system/delete-emails', { which: 'ai', confirm: 'DELETE', haveBackup: true, readAgain: true, sync: false });
+	assert.equal(d2.status, 200); assert.equal(d2.data.threads, 2); assert.equal(d2.data.readAgain, true);
+	assert.equal((await one<any>('select count(*)::int n from emails where org_id=$1', [orgId])).n, 0);
+	assert.equal((await one<any>("select count(*)::int n from mailboxes where org_id=$1 and sync_state <> '{}'::jsonb", [orgId])).n, 0, 'mailboxes will be read again');
+	// nothing else deleted
+	assert.equal((await one<any>('select count(*)::int n from kalyan_customers where org_id=$1', [orgId])).n, keep.kc, 'Kalyan customers kept');
+	assert.equal((await one<any>('select count(*)::int n from book_titles where org_id=$1', [orgId])).n, keep.bt, 'book list kept');
+	assert.equal((await one<any>('select count(*)::int n from orders where org_id=$1', [orgId])).n, keep.or, 'orders kept');
+	assert.equal((await one<any>('select count(*)::int n from stock_uploads where org_id=$1', [orgId])).n, keep.st, 'stock kept');
+	assert.ok((await one<any>('select count(*)::int n from standing_answers where org_id=$1', [orgId])).n >= 1, 'standing answers kept');
+	assert.ok((await one<any>('select count(*)::int n from mailboxes where org_id=$1', [orgId])).n >= 1, 'mailboxes kept');
+	assert.equal((await call('GET', '/api/system/reset')).status, 404, 'delete everything is gone');
+}
 
 console.log('All rebuild tests passed');
 await getPool().end();

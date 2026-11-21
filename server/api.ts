@@ -994,6 +994,8 @@ async function kickUploads() {
 
 /** Sync now: runs in the background in this process so the browser does not wait minutes for a large mailbox. */
 async function kickWorker(mailboxId?: number) {
+	// a copy with WORKER=false never reads mail or analyses in the background
+	if (process.env.WORKER === 'false') return { queued: false };
 	runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }).catch((e) => console.error('[kick]', e.message));
 	return { queued: true };
 }

@@ -27,7 +27,7 @@ bilingual PDF attached to the reply.
 | **Stock** | Branch stock and Gorakhpur main/retail/semi-finished: a dashboard, all the data (search, filter and sort any column, download), and uploads with a check summary and history |
 | **Tracking** | Book orders and Kalyan dispatches: dashboards (with maps by state), all the data, and uploads with a check summary and history |
 | **Admin → Master data** | Locations, Others (delivery partners, Kalyan subscription types and dispatch modes, order statuses), bank details, discount, freight, book list (Suchi PDF or Excel), book links, books (combined) |
-| **Settings** | Emails (sync window, criticality and SLA, completeness facts, reason → group, Kalyan year), Pending questions (summary and weekly trend), Auto-send (coming later; cannot be switched on), Mailboxes, Users, System status (including Delete everything and rebuild), Audit log |
+| **Settings** | Emails (sync window, criticality and SLA, completeness facts, reason → group, Kalyan year), Pending questions (summary and weekly trend), Auto-send (coming later; cannot be switched on), Mailboxes, Users, System status (including Delete emails: AI-analysed, not AI-analysed, or both), Audit log |
 | **To decide** | My day and Mail Sage, kept as they were |
 
 See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**.

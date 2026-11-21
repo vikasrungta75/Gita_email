@@ -105,7 +105,7 @@ function Coverage() {
 	const pct = total ? Math.round((100 * data.by_ai) / total) : 0;
 	return (
 		<Card title="Analysis by AI" accent={COLORS.teal}
-			sub={data.rules ? "The rules engine is chosen, so email is analysed by the rules. Choose Gemini or Claude above to analyse with the AI." : "Email is analysed only by the AI. Until then it waits in Emails → Waiting for AI and is not shown in the other tabs. The rules engine is used only if you choose Rules only. Replies someone has edited and groups set by hand are kept."}
+			sub={data.rules ? "The rules engine is chosen, so email is analysed by the rules. Choose Gemini or Claude above to analyse with the AI." : "Email is analysed only by the AI, and an email is shown in Emails only after the AI has analysed it. The rules engine is used only if you choose Rules only. Replies someone has edited and groups set by hand are kept."}
 			actions={<button className="btn sm" disabled={go.isPending || !data.aiOn || data.rules || !data.waiting_for_ai} onClick={() => go.mutate()}><MdAutorenew /> {go.isPending ? 'Queuing…' : 'Analyse the waiting emails now'}</button>}>
 			<div className="row gap-16 wrap small">
 				<span><b>{total.toLocaleString('en-IN')}</b> threads</span>

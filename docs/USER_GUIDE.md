@@ -3,7 +3,8 @@
 ## Emails
 
 **Tabs.** All · Book order issues · Kalyan · New order — bulk · New order — retail · International orders · Others ·
-Bulk orders and quotes · Open questions · Not for reply · Waiting for AI (emails the AI has not analysed yet). The number on a tab is how many emails still need a reply.
+Bulk orders and quotes · Open questions · Not for reply. An email appears here only after the AI has analysed it;
+until then it is not shown at all (Settings → AI shows how many are waiting). The number on a tab is how many emails still need a reply.
 
 **The list.** Criticality, sender, subject, group and sub-tag, mailbox, completeness, reply status, received and waiting
 time. Select a heading to sort (again to reverse). Filters: reply status (Ready to send, Pending information, Sending,
@@ -130,15 +131,16 @@ Book list (Suchi: the PDF or the Excel version; check summary first) · Book lin
   Flash-Lite, Claude Haiku 5.5); the API keys, stored encrypted and never shown again; **Test the key and model**.
   Changes apply at once, without a restart. Settings → AI takes priority over .env.
   **Email is analysed only by the AI.** Until the AI has analysed an email (no AI set up yet, a paused quota, an error)
-  it waits in **Emails → Waiting for AI** with the reason, and is not shown in the other tabs, counts or questions; it
-  joins its group with a drafted reply once analysed. The rules engine is used only if you choose **Rules only** (or
+  it is not shown in Emails at all (no tab, count or question); it appears in its group with a drafted reply once
+  analysed. The rules engine is used only if you choose **Rules only** (or
   .env says AI_PROVIDER=heuristic). Analysis made earlier by the rules engine was removed and those emails wait for the
-  AI; replies someone had edited were kept. **Analysis by AI** shows the progress, with **Analyse the waiting emails now**.
+  AI; replies someone had edited were kept. **Analysis by AI** shows how many are waiting, with **Analyse the waiting emails now**.
 * **Emails**: sync window (30/60/90 days) and interval; criticality and reply targets; the facts each group needs; which
   reason belongs to which group; the Kalyan year start; the Kalyan columns kept.
 * **Pending questions**: completeness by group, the weekly completeness trend, open questions by type, answer once for
   all emails, and the standing answers with how many emails each completed.
 * **Auto-send**: coming later; it cannot be switched on in this version.
-* **System status → Delete everything and rebuild** (admin): backs up, deletes emails, replies, customers, stock and
-  tracking uploads and the book list and links, keeps master data, rules, standing answers, templates, users and
-  settings, and reads the mailboxes again.
+* **System status → Delete emails** (admin): deletes emails from Gita Mail only (they stay in Gmail), in two parts:
+  **emails analysed by the AI**, **emails not analysed by the AI** (analysed by the rules engine earlier, or still
+  waiting), or both. A backup is taken first. Optionally the mailboxes are read again so the deleted emails come back
+  and are analysed by the AI afresh. Nothing else is deleted: master data, stock, tracking, customers and settings stay.
