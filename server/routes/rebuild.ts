@@ -52,7 +52,7 @@ const EMAIL_SORTS: Record<string, string> = {
 function emailWhere(orgId: number, qs: URLSearchParams) {
 	const params: unknown[] = [orgId];
 	const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
-	// only emails with a current AI analysis (or rules engine, when chosen); the rest wait in "Waiting for AI"
+	// only emails with a current AI analysis (or rules engine, when chosen); the rest are not shown at all until analysed
 	const where = ['c.org_id=$1', 'c.primary_group is not null', readySql('c')];
 	const tab = qs.get('tab') || 'all';
 	if (tab === 'not_for_reply') where.push('c.not_for_reply');
@@ -108,44 +108,25 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		return { rows, total, offset, limit, sla: cfg.slaWorkingDays };
 	});
 
-	// emails waiting for the AI: not shown in the tabs until analysed
-	r.get('/api/emails/waiting', async (ctx) => {
-		const orgId = ctx.user!.orgId;
-		const all = aiConfig().analyseAll;
-		const limit = Math.min(Number(ctx.query.get('limit')) || 100, 500);
-		const offset = Math.max(0, Number(ctx.query.get('offset')) || 0);
-		const text = (ctx.query.get('q') || '').trim();
-		const params: unknown[] = [orgId, all];
-		const search = text ? (params.push(`%${text}%`), `and (c.subject ilike $${params.length} or exists (select 1 from emails e where e.conversation_id=c.id and (e.from_address ilike $${params.length} or e.from_name ilike $${params.length})))`) : '';
-		const W = `c.org_id=$1 and c.message_count > 0 and not ${readySql('c')} and ($2 or not c.is_automated) ${search}`;
-		const rows = await q<any>(
-			`select c.id, c.subject, c.last_inbound_at, c.last_message_at, c.message_count, c.is_automated, c.analysis_pending_reason as reason, c.ai_retry_at as tried_at,
-			        li.from_name, li.from_address, li.snippet, mb.addresses as mailboxes
-			   from conversations c
-			   left join lateral (select from_name, from_address, snippet from emails e where e.conversation_id=c.id and e.direction='inbound' and not e.is_duplicate order by sent_at desc limit 1) li on true
-			   left join lateral (select array_agg(m.address order by m.address) as addresses from mailboxes m where m.id = any(c.mailbox_ids)) mb on true
-			  where ${W} order by c.awaiting_reply desc, c.last_message_at desc limit ${limit} offset ${offset}`, params);
-		const total = (await one<any>(`select count(*)::int n from conversations c where ${W}`, params))!.n;
-		return { rows, total, offset, limit, aiOn: aiProvider() !== 'heuristic', paused: await aiPaused() };
-	});
-
 	r.get('/api/emails/meta', async (ctx) => {
 		const orgId = ctx.user!.orgId;
 		const counts = await q<any>(
 			`select coalesce(c.primary_group,'others') as g, c.not_for_reply as nfr, c.reply_status as s, count(*)::int as n from conversations c where c.org_id=$1 and c.primary_group is not null and ${readySql('c')} group by 1,2,3`, [orgId]);
-		const waiting = (await one<any>(`select count(*)::int n from conversations c where c.org_id=$1 and c.message_count > 0 and not ${readySql('c')} and ($2 or not c.is_automated)`, [orgId, aiConfig().analyseAll]))!.n;
 		const mailboxes = await q<any>(`select id, address, provider, status from mailboxes where org_id=$1 order by address`, [orgId]);
 		const cfg = await emailConfig(orgId);
 		const openQ = (await one<any>(`select count(distinct x->>'key')::int as n from conversations c, jsonb_array_elements(c.open_questions) x where c.org_id=$1 and not c.not_for_reply and c.reply_status in ('pending','ready') and ${readySql('c')}`, [orgId]))!.n;
 		const bulk = (await one<any>(`select count(*)::int n from bulk_requests b join conversations c on c.id=b.conversation_id where b.org_id=$1 and b.stage not in ('closed') and ${readySql('c')}`, [orgId]))!.n;
 		const views = await q<any>('select id, name, query from saved_views where user_id=$1 order by name', [ctx.user!.id]);
-		return { groups: GROUPS, subTags: SUBTAG_LABEL, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABEL[l] })), counts, mailboxes, syncDays: cfg.syncDays, openQuestions: openQ, bulkOpen: bulk, waitingForAi: waiting, views, stages: STAGES, undoSeconds: UNDO_SECONDS };
+		return { groups: GROUPS, subTags: SUBTAG_LABEL, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABEL[l] })), counts, mailboxes, syncDays: cfg.syncDays, openQuestions: openQ, bulkOpen: bulk, views, stages: STAGES, undoSeconds: UNDO_SECONDS };
 	});
 
 	r.get('/api/emails/:id', async (ctx) => {
 		const id = Number(ctx.params.id);
-		const c = await one<any>(`select c.* from conversations c where c.id=$1 and c.org_id=$2`, [id, ctx.user!.orgId]);
+		if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(404, 'Email not found');
+		const c = await one<any>(`select c.*, ${readySql('c')} as ready from conversations c where c.id=$1 and c.org_id=$2`, [id, ctx.user!.orgId]);
 		if (!c) throw new HttpError(404, 'Email not found');
+		// an email is shown only once the AI has analysed it
+		if (!c.ready) throw new HttpError(404, 'This email has not been analysed by the AI yet, so it is not shown. It appears in Emails once it has been analysed (progress: Settings → AI).');
 		const emails = await q<any>(
 			`select e.id, e.direction, e.from_address, e.from_name, e.to_addresses, e.cc_addresses, e.subject, e.body_clean, e.body_text, e.sent_at, e.has_attachments, e.attachments, e.web_link, m.address as mailbox
 			   from emails e left join mailboxes m on m.id=e.mailbox_id where e.conversation_id=$1 and not e.is_duplicate order by e.sent_at`, [id]);
@@ -163,8 +144,7 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		const mailboxes = await q<any>('select address from mailboxes where id = any($1::bigint[])', [c.mailbox_ids]);
 		const draft = await getDraftForConversation(id, ctx.user!.orgId);
 		const bulk = await one<any>('select id, stage, items, totals, value, quote_no, quote_at, notes, updated_at from bulk_requests where conversation_id=$1', [id]);
-		const ready = (await one<any>(`select ${readySql('c')} as ok from conversations c where c.id=$1`, [id]))!.ok;
-		return { conversation: c, emails, mailboxes: mailboxes.map((m) => m.address), draft: ready ? draft : null, bulk: ready ? bulk : null, facts: FACTS, ready };
+		return { conversation: c, emails, mailboxes: mailboxes.map((m) => m.address), draft, bulk, facts: FACTS, ready: true };
 	});
 
 	/** Staff edit the group, sub-tags, criticality or "not for reply"; their choice is kept. */
@@ -605,74 +585,61 @@ Rules:
 		return { byGroup, questions: questions.map((x) => ({ ...x, label: FACTS[x.fact]?.label || x.fact })), unlocked, trend, groups: GROUPS, subTags: SUBTAG_LABEL };
 	});
 
-	// ── Delete everything and rebuild ──
-	r.get('/api/system/reset', async (ctx) => {
+	// ── Delete emails (Settings → System status): AI-analysed emails, emails not analysed by the AI, or both ──
+	// Only emails, their threads, replies and the bulk requests and alerts built on them are deleted. Master data,
+	// stock, tracking, customers, uploads, settings, users and mailboxes are never touched.
+	const KIND_SQL: Record<string, string> = {
+		ai: `(c.analysis_model is not null and c.analysis_model not like 'remail-heuristic%')`,
+		not_ai: `(c.analysis_model is null or c.analysis_model like 'remail-heuristic%')`,
+	};
+	const kindsOf = (v: unknown) => { const k = v === 'both' ? ['ai', 'not_ai'] : v === 'ai' || v === 'not_ai' ? [v] : []; if (!k.length) throw new HttpError(400, 'Choose which emails to delete'); return k as string[]; };
+	const countsFor = async (orgId: number, kind: string) => one<any>(
+		`select count(*)::int as threads, coalesce(sum(c.message_count), 0)::int as emails,
+		        (select count(*)::int from reply_drafts d join conversations c2 on c2.id=d.conversation_id where c2.org_id=$1 and ${KIND_SQL[kind].replace(/\bc\./g, 'c2.')} and d.status <> 'sent') as replies,
+		        (select count(*)::int from bulk_requests b join conversations c3 on c3.id=b.conversation_id where c3.org_id=$1 and ${KIND_SQL[kind].replace(/\bc\./g, 'c3.')}) as bulk,
+		        min(c.last_message_at)::text as first, max(c.last_message_at)::text as last
+		   from conversations c where c.org_id=$1 and ${KIND_SQL[kind]}`, [orgId]);
+	r.get('/api/system/delete-emails', async (ctx) => {
 		requireRole(ctx.user, 'admin');
 		const orgId = ctx.user!.orgId;
-		const n = async (sql: string) => (await one<any>(sql, [orgId]))?.n ?? 0;
 		return {
-			delete: {
-				Emails: await n('select count(*)::int n from emails where org_id=$1'),
-				'Email threads': await n('select count(*)::int n from conversations where org_id=$1'),
-				'Reply drafts': await n('select count(*)::int n from reply_drafts where org_id=$1'),
-				'Email senders and old customer records': await n('select count(*)::int n from customers where org_id=$1'),
-				'Orders (tracking)': await n('select count(*)::int n from orders where org_id=$1'),
-				'Kalyan dispatches': await n('select count(*)::int n from kalyan_dispatches where org_id=$1'),
-				'Kalyan customers': await n('select count(*)::int n from kalyan_customers where org_id=$1'),
-				'Stock uploads': await n('select count(*)::int n from stock_uploads where org_id=$1'),
-				'Books (list and links)': await n('select count(*)::int n from book_titles where org_id=$1'),
-				'Bulk requests and quotes': await n('select count(*)::int n from bulk_requests where org_id=$1'),
-			},
-			keep: ['Branch locations', 'Delivery partners and tracking websites', 'Kalyan subscription types and dispatch modes', 'Bank, discount and freight details', 'Groups, sub-tags, reasons and email rules',
-				'Standing answers', 'Templates and help', 'Settings, users and mailboxes (they will read mail again)', 'Audit log'],
+			ai: await countsFor(orgId, 'ai'),
+			not_ai: await countsFor(orgId, 'not_ai'),
+			keep: ['Master data (locations, delivery partners, Kalyan types, bank, discount, freight, book list and links)', 'Stock and tracking uploads', 'Kalyan customers',
+				'Rules, standing answers, templates and signature', 'Settings, users and mailboxes', 'The emails in Gmail itself', 'Audit log'],
 		};
 	});
-	r.post('/api/system/reset', async (ctx) => {
+	r.post('/api/system/delete-emails', async (ctx) => {
 		requireRole(ctx.user, 'admin');
-		if (ctx.body?.confirm !== 'DELETE') throw new HttpError(400, 'Type DELETE to confirm');
+		const b = ctx.body || {};
+		const kinds = kindsOf(b.which);
+		if (b.confirm !== 'DELETE') throw new HttpError(400, 'Type DELETE to confirm');
 		const orgId = ctx.user!.orgId;
 		// 1. a backup first (pg_dump); if it cannot be made, the admin must confirm they have one
 		let backup: string | null = null;
 		try {
 			const dir = path.resolve(process.env.BACKUP_DIR || 'backups');
 			fs.mkdirSync(dir, { recursive: true });
-			backup = path.join(dir, `gitamail-before-reset-${new Date().toISOString().replace(/[:.]/g, '-')}.dump`);
+			backup = path.join(dir, `gitamail-before-delete-emails-${new Date().toISOString().replace(/[:.]/g, '-')}.dump`);
 			await run('pg_dump', ['--format=custom', '--no-owner', `--dbname=${databaseUrl().replace(/\?.*$/, '')}`, `--file=${backup}`], { timeout: 15 * 60_000 });
 		} catch (e: any) {
 			backup = null;
-			if (!ctx.body?.haveBackup) throw new HttpError(400, `An automatic backup could not be made (${String(e.message).slice(0, 120)}). Make a backup yourself (deploy/windows/backup.ps1 or scripts/backup.sh), then tick "I have a backup" and try again.`);
+			if (!b.haveBackup) throw new HttpError(400, `An automatic backup could not be made (${String(e.message).slice(0, 120)}). Make a backup yourself (deploy/windows/backup.ps1 or scripts/backup.sh), then tick "I have a backup" and try again.`);
 		}
-		// 2. delete
-		await tx(async (c) => {
-			const del = async (sql: string) => c.query(sql, [orgId]);
-			await del(`update reply_drafts set status='dismissed' where org_id=$1 and status='queued'`);
-			await del('delete from bulk_requests where org_id=$1');
-			await del('delete from book_requests where org_id=$1');
-			await del('delete from emails where org_id=$1');
-			await del('delete from conversations where org_id=$1');
-			await del('delete from alerts where org_id=$1');
-			await del('delete from contacts where org_id=$1');
-			await del('delete from customers where org_id=$1');
-			await del('delete from order_status_history where org_id=$1');
-			await del('delete from orders where org_id=$1');
-			await del('delete from kalyan_dispatches where org_id=$1');
-			await del('delete from kalyan_subscribers where org_id=$1');
-			await del('delete from kalyan_customer_years where org_id=$1');
-			await del('delete from kalyan_customers where org_id=$1');
-			await del(`delete from upload_batches where org_id=$1`);
-			await del('delete from stock_uploads where org_id=$1');
-			await del('delete from book_titles where org_id=$1');
-			await del('delete from book_sets where org_id=$1');
-			await del(`delete from master_uploads where org_id=$1 and kind='suchi'`);
-			await del('delete from completeness_daily where org_id=$1');
-			await del('delete from analytics_runs where org_id=$1');
-			await del(`update mailboxes set sync_state='{}'::jsonb, messages_synced=0, last_synced_at=null, last_error=null where org_id=$1`);
+		// 2. delete the chosen emails and their threads (replies, notes, alerts and bulk requests go with the thread)
+		const where = kinds.map((k) => KIND_SQL[k]).join(' or ');
+		const counts = await tx(async (c) => {
+			const ids = (await c.query(`select c.id from conversations c where c.org_id=$1 and (${where})`, [orgId])).rows.map((r: any) => r.id);
+			if (!ids.length) return { threads: 0, emails: 0 };
+			const em = await c.query('delete from emails where conversation_id = any($1::bigint[])', [ids]);
+			await c.query('delete from conversations where id = any($1::bigint[])', [ids]);
+			return { threads: ids.length, emails: em.rowCount || 0 };
 		});
-		const { forgetStock } = await import('../stock/stock');
-		forgetStock(orgId);
-		await audit(ctx, 'system.reset', 'organisation', orgId, { backup });
-		if (ctx.body?.sync !== false) await deps.kickWorker();
-		return { success: true, backup };
+		// 3. optionally read the mailboxes again, so the deleted emails come back and are analysed by the AI afresh
+		if (b.readAgain) await q(`update mailboxes set sync_state='{}'::jsonb, last_synced_at=null, last_error=null where org_id=$1`, [orgId]);
+		await audit(ctx, 'emails.deleted', 'organisation', orgId, { which: kinds, ...counts, readAgain: !!b.readAgain, backup });
+		if (b.readAgain && b.sync !== false) deps.kickWorker().catch(() => {});
+		return { success: true, ...counts, backup, readAgain: !!b.readAgain };
 	});
 }
 

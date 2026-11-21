@@ -6,7 +6,7 @@ import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { Card, Loader, Modal, PageHead, Segmented, Switch } from '../../components/ui';
-import { EmailRules, PendingQuestions, AutoSend, ResetCard } from './EmailSettings';
+import { EmailRules, PendingQuestions, AutoSend, DeleteEmailsCard } from './EmailSettings';
 import Reasons from './Reasons';
 import Mailboxes from './Mailboxes';
 import Users from './Users';
@@ -116,7 +116,7 @@ export default function Settings() {
 				{tab === 'reasons' && <Reasons />}
 				{tab === 'mailboxes' && <Mailboxes />}
 				{tab === 'users' && <Users />}
-				{tab === 'status' && <><SystemStatus /><Processing />{can('admin') && <ResetCard />}</>}
+				{tab === 'status' && <><SystemStatus /><Processing />{can('admin') && <DeleteEmailsCard />}</>}
 				{tab === 'audit' && <Audit />}
 			</div>
 		</>

@@ -35,8 +35,8 @@ everything on this computer, and is opened at **http://localhost:8888**. About 2
    Then restart: Task Scheduler → **Gita Mail** → End, then Run (or sign out and in).
 4. Open **http://localhost:8888**, sign in, go to **Settings → Mailboxes**, upload the service account key and add
    booksales@, manager@, retailsales@, mumbai@ and kalyan@gitapress.org.
-5. **Settings → System status → Delete everything and rebuild** (first run only): clears the old mail, customers and uploads,
-   then reads 90 days of mail again.
+5. If old mail from the previous system is in the database: **Settings → System status → Delete emails** → **Both**, tick
+   **Read the mailboxes again**. Emails appear in Emails as the AI analyses them.
 6. Upload the data: **Admin → Master data → Book list (Suchi)** and **Book links**, then **Stock** and **Tracking** (orders,
    branch stock, main stock, Kalyan tracking) and **Customer database** (all customers, current year).
 

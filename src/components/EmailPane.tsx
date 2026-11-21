@@ -53,7 +53,7 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 	const { can } = useAuth();
 	const toast = useToast();
 	const qc = useQueryClient();
-	const { data, isLoading, refetch } = useQuery({ queryKey: ['email', id], queryFn: () => api(`/emails/${id}`), refetchInterval: (q: any) => (q.state.data?.draft?.status === 'queued' ? 3000 : false) });
+	const { data, isLoading, refetch, error } = useQuery({ queryKey: ['email', id], queryFn: () => api(`/emails/${id}`), retry: false, refetchInterval: (q: any) => (q.state.data?.draft?.status === 'queued' ? 3000 : false) });
 	const refresh = () => { qc.invalidateQueries({ queryKey: ['email', id] }); qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['emails-meta'] }); };
 	const err = (e: any) => toast(e.message, 'error');
 	const [answers, setAnswers] = useState<Record<string, { value: string; standing: boolean }>>({});
@@ -89,6 +89,7 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 	const facts: any[] = c?.facts || [];
 	const draft = data?.draft;
 	const missing = useMemo(() => (draft?.body || '').match(/\[\[\s*provide\s*:/gi)?.length || 0, [draft?.body]);
+	if (error) return <div className="pane"><div className="pane-head"><div className="grow small">{(error as any).message}</div>{onClose && <button className="btn ghost icon sm" aria-label="Close" onClick={onClose}><MdCancel /></button>}</div></div>;
 	if (isLoading || !c) return <div className="pane"><Loader /></div>;
 	const inbound = data.emails.filter((e: any) => e.direction === 'inbound');
 	const secs = draft?.send_at ? Math.max(0, Math.round((new Date(draft.send_at).getTime() - now) / 1000)) : 0;
@@ -104,10 +105,6 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 				{onClose && <button className="btn ghost icon sm" aria-label="Close" onClick={onClose}><MdCancel /></button>}
 			</div>
 
-			{data.ready === false && (
-				<div className="pane-note waiting-note"><b>Waiting for the AI.</b> {(c.analysis_pending_reason || 'This email has not been analysed by the AI yet').replace(/\.?$/, '.')} Its group, facts and reply appear once it has been analysed.</div>
-			)}
-			{data.ready !== false && <>
 			<div className="pane-tags">
 				<select className="input sm" disabled={!analyst} value={c.primary_group || ''} onChange={(e) => tag.mutate({ primary_group: e.target.value, sub_tags: [] })} aria-label="Group">
 					{groups.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
@@ -205,8 +202,6 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 							)}
 						</div>
 					)}
-
-			</>}
 
 			{/* 4. the whole mail trail, newest first */}
 			<MailTrail emails={data.emails} isBulk={c.primary_group === 'bulk_order' && !!data.bulk} bulkId={data.bulk?.id} onErr={err} />
