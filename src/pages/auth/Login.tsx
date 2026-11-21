@@ -68,7 +68,7 @@ export default function Login() {
 			{ssoError && <div className="notice error mb-16 small">{ssoError}</div>}
 			{cfg.isError && (
 				<div className="notice warn mb-16 small">
-					<span>The server is not fully set up yet. Open <a href="/api/health" target="_blank" rel="noreferrer">the setup check</a> to see what is missing in Netlify.</span>
+					<span>The server is not fully set up yet. Open <a href="/api/health" target="_blank" rel="noreferrer">the setup check</a> to see what is missing in .env.</span>
 				</div>
 			)}
 			{cfg.data?.google && (

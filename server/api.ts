@@ -40,6 +40,7 @@ import { normalisePurposes, purposeLabel } from './ai/purposes';
 import { getPurposeDefs } from './ai/purposeDefs';
 import { computeTiers, moveCustomerData, refreshStats } from './customers/link';
 import { registerStage1 } from './routes/stage1';
+import { registerRebuild } from './routes/rebuild';
 import { printPage } from './print';
 import { runUploads } from './worker';
 import { writeXlsx } from './xlsx';
@@ -984,35 +985,15 @@ r.del('/api/mailboxes/:id', async (ctx) => {
 	return { success: true };
 });
 
-/** Start working through uploads in the background (hosted: the background function; otherwise in this process). */
+/** Start working through uploads now, in this process (the server runs the worker itself). */
 async function kickUploads() {
-	const base = process.env.URL;
-	const secret = process.env.INTERNAL_API_SECRET;
-	if (base && secret && process.env.NETLIFY) {
-		await fetch(`${base}/.netlify/functions/worker-background`, { method: 'POST', headers: { 'x-remail-secret': secret, 'content-type': 'application/json' }, body: JSON.stringify({ uploads: true }) }).catch((e) => console.error('[kick]', e.message));
-		return;
-	}
 	runUploads(10 * 60_000).catch((e) => console.error('[uploads]', e.message));
 }
 
+/** Sync now: runs in the background in this process so the browser does not wait minutes for a large mailbox. */
 async function kickWorker(mailboxId?: number) {
-	// On Netlify, hand off to the background function (15 min budget); locally run inline.
-	const base = process.env.URL;
-	const secret = process.env.INTERNAL_API_SECRET;
-	if (base && secret && process.env.NETLIFY) {
-		await fetch(`${base}/.netlify/functions/worker-background`, {
-			method: 'POST',
-			headers: { 'x-remail-secret': secret, 'content-type': 'application/json' },
-			body: JSON.stringify({ mailboxId }),
-		}).catch((e) => console.error('[kick]', e.message));
-		return { queued: true };
-	}
-	// Local edition: run in the background so the browser does not wait minutes for a large mailbox
-	if (process.env.LOCAL_MODE) {
-		runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }).catch((e) => console.error('[kick]', e.message));
-		return { queued: true };
-	}
-	return { queued: false, result: await runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }) };
+	runTick({ mailboxId, budgetMs: 8 * 60_000, reports: false }).catch((e) => console.error('[kick]', e.message));
+	return { queued: true };
 }
 
 r.post('/api/mailboxes/:id/sync', async (ctx) => {
@@ -1408,8 +1389,10 @@ r.get('/api/stock/uploads', async (ctx) => {
 r.post('/api/stock/upload', async (ctx) => {
 	requireRole(ctx.user, 'manager');
 	const { slot, fileName } = ctx.body || {};
-	const res = await importStock(ctx.user!.orgId, ctx.user!.id, slot, String(fileName || 'stock.xlsx'), fileBytes(ctx.body));
+	const res: any = await importStock(ctx.user!.orgId, ctx.user!.id, slot, String(fileName || 'stock.xlsx'), fileBytes(ctx.body));
 	await audit(ctx, 'stock.uploaded', 'stock_upload', res.upload.id, { slot, fileName, period: res.period, rows: res.rows, replaced: res.replaced });
+	const { markAllForEnrich } = await import('./email/enrich');
+	await markAllForEnrich(ctx.user!.orgId);
 	return res;
 });
 r.del('/api/stock/uploads/:id', async (ctx) => {
@@ -1513,6 +1496,7 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 });
 // /api/purposes and the Stage 1 routes (uploads, master data, customers, reasons) live in server/routes/stage1.ts
 registerStage1(r, { kickUploads });
+registerRebuild(r, { kickWorker, kickUploads });
 
 
 // ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──
@@ -1653,9 +1637,8 @@ r.post('/api/internal/tick', async (ctx) => {
 async function setupCheck() {
 	const has = (k: string) => !!process.env[k];
 	const checks: Record<string, { ok: boolean; detail: string }> = {};
-	const netlifyDb = !!(globalThis as any).Netlify?.env?.get?.('NETLIFY_DB_URL');
-	const dbVar = ['DATABASE_URL', 'NETLIFY_DB_URL', 'NETLIFY_DATABASE_URL', 'NETLIFY_DATABASE_URL_UNPOOLED'].find(has) || (netlifyDb ? 'NETLIFY_DB_URL' : undefined);
-	checks.database_variable = { ok: !!dbVar, detail: dbVar ? `using ${dbVar}` : 'Missing: in Netlify open Data & Storage → Database → Create a database, or set DATABASE_URL to a Neon connection string' };
+	const dbVar = has('DATABASE_URL') ? 'DATABASE_URL' : undefined;
+	checks.database_variable = { ok: !!dbVar, detail: dbVar ? 'using DATABASE_URL' : 'Missing: set DATABASE_URL in .env, e.g. postgres://gitamail:PASSWORD@localhost:5432/gitamail' };
 	if (dbVar) {
 		try {
 			await Promise.race([q('select 1'), new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after 8s')), 8000))]);
@@ -1673,7 +1656,6 @@ async function setupCheck() {
 	}
 	checks.JWT_SECRET = { ok: (process.env.JWT_SECRET || '').length >= 32, detail: has('JWT_SECRET') ? ((process.env.JWT_SECRET || '').length >= 32 ? 'set' : 'too short: needs 32+ characters') : 'Missing' };
 	checks.ENCRYPTION_KEY = { ok: has('ENCRYPTION_KEY'), detail: has('ENCRYPTION_KEY') ? 'set' : 'Missing (needed to connect mailboxes)' };
-	checks.INTERNAL_API_SECRET = { ok: has('INTERNAL_API_SECRET'), detail: has('INTERNAL_API_SECRET') ? 'set' : 'Missing (needed for background sync)' };
 	checks.ADMIN_EMAIL_and_PASSWORD = { ok: has('ADMIN_EMAIL') && has('ADMIN_PASSWORD'), detail: has('ADMIN_EMAIL') && has('ADMIN_PASSWORD') ? `admin: ${process.env.ADMIN_EMAIL}` : 'Missing ADMIN_EMAIL or ADMIN_PASSWORD' };
 	if (has('ADMIN_PASSWORD')) {
 		const pw = process.env.ADMIN_PASSWORD || '';
@@ -1685,6 +1667,7 @@ async function setupCheck() {
 	checks.google_workspace_shared_mailboxes = { ok: !!sa, detail: sa ? `service account ${sa.client_email} (client ID ${sa.client_id})` : has('GOOGLE_SERVICE_ACCOUNT_JSON') ? 'GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON' : 'optional: upload the service account key in Admin → Mailboxes' };
 	checks.ai = { ok: true, detail: `${aiProvider()} · ${aiModel()}` };
 	checks.site_url = { ok: true, detail: appUrl() };
+	checks.hosting = { ok: true, detail: `${process.env.APP_ROLE || 'local'} server (Node ${process.version})` };
 	const ok = Object.entries(checks).every(([k, v]) => v.ok || k === 'google_workspace_shared_mailboxes');
 	return { ok, time: new Date().toISOString(), checks };
 }
@@ -1694,7 +1677,7 @@ r.get('/api/health', async () => setupCheck(), { auth: 'public' });
 // ── Entry point ─────────────────────────────────────────────────────────────
 export async function handle(req: Request): Promise<Response> {
 	const url = new URL(req.url);
-	const pathname = url.pathname.replace(/^\/\.netlify\/functions\/api/, '/api').replace(/\/$/, '');
+	const pathname = url.pathname.replace(/\/$/, '');
 	const m = r.match(req.method, pathname);
 	if (!m) return json({ error: 'Not found' }, 404);
 	if (pathname === '/api/health') {
@@ -1707,7 +1690,7 @@ export async function handle(req: Request): Promise<Response> {
 		params: m.params,
 		query: url.searchParams,
 		body: undefined,
-		ip: (req.headers.get('x-nf-client-connection-ip') || req.headers.get('x-forwarded-for') || '').split(',')[0].trim(),
+		ip: (req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for') || '').split(',')[0].trim(),
 		ua: req.headers.get('user-agent') || '',
 	};
 	try {
@@ -1727,7 +1710,7 @@ export async function handle(req: Request): Promise<Response> {
 		if (e instanceof HttpError) return json({ error: e.message, details: e.details }, e.status);
 		if (e instanceof SyntaxError) return json({ error: 'Invalid JSON body' }, 400);
 		console.error('[api]', req.method, pathname, e);
-		// Setup problems are shown plainly so they can be fixed from the Netlify dashboard
+		// Setup problems are shown plainly so they can be fixed in .env
 		const msg = String(e?.message || '');
 		if (/DATABASE_URL|JWT_SECRET|ENCRYPTION_KEY|ECONNREFUSED|ENOTFOUND|password authentication failed|getaddrinfo|SSL|timeout/i.test(msg)) {
 			return json({ error: `Server setup issue: ${msg.slice(0, 200)}. Open /api/health for a full setup check.` }, 503);

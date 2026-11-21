@@ -1,0 +1,23 @@
+[Unit]
+Description=Gita Mail (web app, API, mail sync and send queue)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=gitamail
+Group=gitamail
+WorkingDirectory=/opt/gitamail
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/gitamail /var/backups/gitamail /var/lib/gitamail
+
+[Install]
+WantedBy=multi-user.target

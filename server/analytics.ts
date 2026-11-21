@@ -9,7 +9,6 @@
 import { one, q } from './db';
 import { getOrg, invalidateOrg } from './settings';
 import { HttpError } from './http';
-import { computeTiers, linkPeople, raiseBuyerAlerts, refreshStats } from './customers/link';
 import { forgetStock, inventorySettings, reclassifyGodowns } from './stock/stock';
 
 export interface AnalyticsSchedule { frequency: 'daily' | 'twice_weekly' | 'weekly' | 'monthly'; hourIst: number }
@@ -49,11 +48,9 @@ export async function runAnalytics(orgId: number, trigger: string, runId?: numbe
 	try {
 		// stock already uploaded follows the current list of transfer godowns (Delhi's three by default)
 		await timed('Transfer godowns', async () => { await reclassifyGodowns(orgId, (await inventorySettings(orgId)).nonSalesGodowns); forgetStock(orgId); return {}; });
-		await timed('Link order customers', () => linkPeople(orgId, 'orders'));
-		await timed('Link Kalyan subscribers', () => linkPeople(orgId, 'kalyan'));
-		await timed('Order and Kalyan figures', () => refreshStats(orgId));
-		await timed('Tiers', () => computeTiers(orgId));
-		await timed('Important buyer alerts', () => raiseBuyerAlerts(orgId));
+		// customers are never created from orders or Kalyan tracking any more (the Kalyan customer files are uploaded);
+		// the emails waiting for these uploads are worked out again
+		await timed('Emails to recheck', async () => { const { markAllForEnrich } = await import('./email/enrich'); await markAllForEnrich(orgId); return {}; });
 		await q(`update analytics_runs set status='done', finished_at=now(), steps=$2 where id=$1`, [run!.id, JSON.stringify(steps)]);
 	} catch (e: any) {
 		console.error('[analytics]', e);

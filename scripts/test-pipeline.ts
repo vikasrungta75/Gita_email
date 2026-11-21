@@ -336,7 +336,9 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 			if (rows.length) { await batches.addRows(orgId, id, { start: n, rows }); n += rows.length; }
 		}, { batch: 2 });
 		await batches.addFilePart(orgId, id, 0, data);
-		await batches.finishBatch(orgId, id, { rows: n });
+		const fin = await batches.finishBatch(orgId, id, { rows: n });
+		assert.equal(fin.status, 'review', 'nothing is applied before the check summary is confirmed');
+		await batches.confirmBatch(orgId, id, {});
 		await batches.processBatches(orgId, Date.now() + 120_000);
 		return one<any>('select * from upload_batches where id=$1', [id]);
 	};
@@ -444,51 +446,10 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	assert.equal((await one<any>(`select renewal_est from kalyan_subscribers where custno='102'`)).renewal_est, null, 'life member: never');
 	assert.equal((await one<any>(`select state_norm from kalyan_subscribers where custno='102'`)).state_norm, 'Maharashtra');
 
-	// ── one customer per person ──
-	await q(`insert into contacts (org_id, customer_id, email, name) select $1, id, 'asha@example.com', 'Asha' from customers where org_id=$1 order by id limit 1 on conflict do nothing`, [orgId]);
-	const emailCustomer = (await one<any>(`select customer_id from contacts where email='asha@example.com'`)).customer_id;
+	// ── customers are no longer created from orders or Kalyan tracking (the Kalyan customer files are uploaded) ──
 	await runAnalytics(orgId, 'test');
-	assert.equal((await one<any>(`select customer_id from orders where order_key='GPHO_9001'`)).customer_id, emailCustomer, 'order linked by email to the customer who wrote');
-	assert.equal((await one<any>(`select customer_id from orders where order_key='GPHO_9002'`)).customer_id, emailCustomer, 'order with no email linked by mobile');
-	assert.equal((await one<any>(`select customer_id from kalyan_subscribers where custno='101'`)).customer_id, emailCustomer, 'Kalyan subscriber linked by mobile');
-	const asha = await one<any>(`select * from customers where id=$1`, [emailCustomer]);
-	assert.ok(asha.kalyan_buyer && asha.orders_count === 2 && Number(asha.orders_spend) === 3700);
-	assert.ok(asha.matched_by.includes('email') && asha.matched_by.includes('phone'), 'how each link was made is recorded');
-	assert.notEqual((await one<any>(`select customer_id from orders where order_key='GPHO9001'`)).customer_id, emailCustomer, 'a different person is not merged');
-	// same name and PIN code: a suggestion, never a merge
-	const twinA = await one<any>(`select customer_id from kalyan_subscribers where custno='200'`);
-	await q(`insert into kalyan_subscribers (org_id, custno, name, city, pin, state, sub_type, dispatches) values ($1, '999', 'READER 0', 'PATNA', '800001', 'BIHAR', '1Y', 1)`, [orgId]);
-	await q(`insert into kalyan_dispatches (org_id, custno, from_issue, to_issue, dispdate, mode) values ($1, '999', 8, 8, '2026-08-10', 'ORDINARY')`, [orgId]);
-	await runAnalytics(orgId, 'test');
-	const twinB = await one<any>(`select customer_id from kalyan_subscribers where custno='999'`);
-	assert.notEqual(twinA.customer_id, twinB.customer_id);
-	assert.ok(await one(`select 1 from customer_reviews where kind='name_pin' and customer_a=least($1::bigint,$2::bigint) and customer_b=greatest($1::bigint,$2::bigint)`, [twinA.customer_id, twinB.customer_id]), 'same name and PIN listed for staff');
-	// tiers, filters, sorting and the record's history
-	const tiers = await link.computeTiers(orgId);
-	assert.ok(tiers.ranked > 0);
-	assert.equal((await one<any>(`select buyer_tier from customers where id=$1`, [emailCustomer])).buyer_tier, 'platinum', 'the biggest buyer is Platinum');
-	const plat = await listCustomerDb(orgId, new URLSearchParams({ tier: 'platinum' }));
-	assert.ok(plat.rows.every((r: any) => r.buyer_tier === 'platinum') && plat.rows.some((r: any) => r.id === emailCustomer));
-	assert.ok((await listCustomerDb(orgId, new URLSearchParams({ kalyan: 'yes', orders: 'yes' }))).rows.some((r: any) => r.id === emailCustomer));
-	const bySpend = (await listCustomerDb(orgId, new URLSearchParams({ sort: 'spend' }))).rows.map((r: any) => r.orders_spend);
-	assert.deepEqual(bySpend, [...bySpend].sort((x, y) => y - x), 'sorted by spend');
-	assert.ok((await listCustomerDb(orgId, new URLSearchParams({ q: '101' }))).rows.some((r: any) => r.id === emailCustomer), 'search by Kalyan subscriber number');
-	const hist = await link.customerHistory(orgId, emailCustomer);
-	assert.equal(hist.orders.length, 2);
-	assert.ok(hist.dispatches.length >= 4);
-	// split: move the Kalyan subscription to a new customer
-	const sp = await link.splitCustomer(orgId, emailCustomer, { custnos: ['101'], name: 'Asha Devi (Kalyan)' });
-	assert.equal((await one<any>(`select customer_id from kalyan_subscribers where custno='101'`)).customer_id, sp.id);
-	assert.equal((await one<any>(`select kalyan_buyer from customers where id=$1`, [emailCustomer])).kalyan_buyer, false);
-	// important buyers: alert when they go quiet
-	await q(`update orders set ordered_at = now() - interval '120 days' where customer_id=$1`, [emailCustomer]);
-	await link.refreshStats(orgId);
-	await link.computeTiers(orgId);
-	assert.ok((await link.raiseBuyerAlerts(orgId)).buyersQuiet >= 1);
-	assert.equal((await link.raiseBuyerAlerts(orgId)).buyersQuiet, 0, 'raised once');
-	// replies to send: Platinum and Gold first
-	const { listDrafts } = await import('../server/drafts');
-	assert.ok(Array.isArray(await listDrafts('d.org_id=$1', [orgId], 'draft')));
+	assert.equal((await one<any>(`select count(*)::int n from customers where from_uploads`)).n, 0, 'no customer created from orders or Kalyan tracking');
+	assert.equal((await one<any>(`select customer_id from orders where order_key='GPHO_9001'`)).customer_id, null);
 
 	// ── history: kept, removable, original downloadable; the retention job never touches it ──
 	const hist2 = await batches.uploadHistory(orgId, new URLSearchParams());
@@ -507,7 +468,7 @@ assert.equal(rep.totals.conversations, rep.groups.reduce((n: number, x: any) => 
 	await assert.rejects(batches.removeBatch(orgId, ob.id, null, true), /Remove it first/);
 	await batches.removeBatch(orgId, extra.id, null, true);
 	assert.equal(await one(`select 1 from upload_batches where id=$1`, [extra.id]), null, 'erased permanently');
-	await assert.rejects(batches.startBatch(orgId, null, { kind: 'orders', header: KH }), /Kalyan dispatch file/, 'a Kalyan file in the Orders slot is refused');
+	await assert.rejects(batches.startBatch(orgId, null, { kind: 'orders', header: KH }), /Kalyan tracking file/, 'a Kalyan file in the Orders slot is refused');
 	await assert.rejects(batches.startBatch(orgId, null, { kind: 'orders', header: OH.slice(2) }), /missing.*orderId/);
 }
 

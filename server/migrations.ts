@@ -901,4 +901,220 @@ create table if not exists purpose_retags (
   finished_at timestamptz
 );
 ` },
+{ id: '014_rebuild_email_master_kalyan', sql: String.raw`
+-- ── Master data: bank, discount, freight, delivery partners, Kalyan types and modes (one value per key, with history) ──
+create table if not exists master_values (
+  org_id     bigint not null references organisations(id) on delete cascade,
+  key        text not null,
+  value      jsonb not null default '{}',
+  updated_at timestamptz not null default now(),
+  updated_by bigint references users(id) on delete set null,
+  primary key (org_id, key)
+);
+create table if not exists master_history (
+  id         bigserial primary key,
+  org_id     bigint not null references organisations(id) on delete cascade,
+  key        text not null,
+  value      jsonb not null,
+  changed_at timestamptz not null default now(),
+  changed_by bigint references users(id) on delete set null
+);
+create index if not exists master_history_idx on master_history (org_id, key, changed_at desc);
+create table if not exists master_files (
+  org_id       bigint not null references organisations(id) on delete cascade,
+  key          text not null,
+  file_name    text not null default '',
+  content_type text not null default 'image/png',
+  bytes        bytea not null,
+  updated_at   timestamptz not null default now(),
+  primary key (org_id, key)
+);
+
+-- ── Books (combined): the book list (Suchi) and the book links joined by code ──
+alter table book_titles add column if not exists suchi_title text;
+alter table book_titles add column if not exists native_title text;
+alter table book_titles add column if not exists size_en text;
+alter table book_titles add column if not exists pages int;
+alter table book_titles add column if not exists carton int;
+alter table book_titles add column if not exists binding text;
+alter table book_titles add column if not exists best_seller boolean not null default false;
+alter table book_titles add column if not exists editions jsonb not null default '[]';
+alter table book_titles add column if not exists set_code text;
+alter table book_titles add column if not exists suchi_price numeric;
+alter table book_titles add column if not exists in_suchi boolean not null default false;
+alter table book_titles add column if not exists in_links boolean not null default false;
+alter table book_titles add column if not exists edited_fields text[] not null default '{}';
+create table if not exists book_sets (
+  org_id    bigint not null references organisations(id) on delete cascade,
+  set_code  text not null,
+  codes     text[] not null default '{}',
+  volumes   int,
+  primary key (org_id, set_code)
+);
+create table if not exists master_uploads (
+  id          bigserial primary key,
+  org_id      bigint not null references organisations(id) on delete cascade,
+  kind        text not null,
+  file_name   text not null default '',
+  bytes       bytea,
+  summary     jsonb not null default '{}',
+  uploaded_by bigint references users(id) on delete set null,
+  uploaded_at timestamptz not null default now()
+);
+create index if not exists master_uploads_idx on master_uploads (org_id, kind, uploaded_at desc);
+
+-- ── Email: primary group (6 tabs), sub-tags, criticality, completeness, reply status ──
+alter table conversations add column if not exists primary_group text;
+alter table conversations add column if not exists sub_tags text[] not null default '{}';
+alter table conversations add column if not exists group_locked boolean not null default false;
+alter table conversations add column if not exists criticality text;
+alter table conversations add column if not exists criticality_locked boolean not null default false;
+alter table conversations add column if not exists completeness int;
+alter table conversations add column if not exists facts jsonb not null default '[]';
+alter table conversations add column if not exists open_questions jsonb not null default '[]';
+alter table conversations add column if not exists reply_status text not null default 'pending';
+alter table conversations add column if not exists not_for_reply boolean not null default false;
+alter table conversations add column if not exists not_for_reply_locked boolean not null default false;
+alter table conversations add column if not exists reader_language text;
+alter table conversations add column if not exists enriched_at timestamptz;
+alter table conversations add column if not exists needs_enrich boolean not null default true;
+-- answers staff typed on this email (question key → answer); lookups (order number, Kalyan number, books, place) re-run the enrichment
+alter table conversations add column if not exists answers jsonb not null default '{}';
+create index if not exists conversations_group_idx on conversations (org_id, primary_group, last_message_at desc);
+create index if not exists conversations_needs_enrich_idx on conversations (org_id) where needs_enrich;
+create index if not exists conversations_open_q_idx on conversations using gin (open_questions jsonb_path_ops);
+alter table emails add column if not exists attachments jsonb not null default '[]';
+
+-- answers staff save once and reuse on every email that asks the same question
+create table if not exists standing_answers (
+  id           bigserial primary key,
+  org_id       bigint not null references organisations(id) on delete cascade,
+  question_key text not null,
+  question     text not null default '',
+  answer       text not null,
+  group_key    text,
+  created_by   bigint references users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (org_id, question_key)
+);
+create table if not exists saved_views (
+  id         bigserial primary key,
+  org_id     bigint not null references organisations(id) on delete cascade,
+  user_id    bigint not null references users(id) on delete cascade,
+  name       text not null,
+  query      text not null default '',
+  created_at timestamptz not null default now()
+);
+create table if not exists completeness_daily (
+  org_id      bigint not null references organisations(id) on delete cascade,
+  day         date not null,
+  group_key   text not null,
+  emails      int not null default 0,
+  complete    int not null default 0,
+  avg_pct     numeric not null default 0,
+  primary key (org_id, day, group_key)
+);
+
+-- send queue: Send waits 30 seconds (undo) or until the chosen "send later" time; never automatic
+alter table reply_drafts add column if not exists send_at timestamptz;
+alter table reply_drafts add column if not exists queued_by bigint references users(id) on delete set null;
+alter table reply_drafts add column if not exists attachments jsonb not null default '[]';
+alter table reply_drafts drop constraint if exists reply_drafts_status_check;
+alter table reply_drafts add constraint reply_drafts_status_check check (status in ('draft','queued','sent','dismissed','replied_elsewhere'));
+create index if not exists reply_drafts_queue_idx on reply_drafts (send_at) where status = 'queued';
+
+-- ── Bulk orders and quotes ──
+create table if not exists bulk_requests (
+  id              bigserial primary key,
+  org_id          bigint not null references organisations(id) on delete cascade,
+  conversation_id bigint not null references conversations(id) on delete cascade,
+  stage           text not null default 'received',
+  items           jsonb not null default '[]',
+  totals          jsonb not null default '{}',
+  value           numeric,
+  quote_no        text,
+  quote_pdf       bytea,
+  quote_at        timestamptz,
+  notes           text not null default '',
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  updated_by      bigint references users(id) on delete set null,
+  unique (conversation_id)
+);
+create index if not exists bulk_requests_org_idx on bulk_requests (org_id, stage, updated_at desc);
+create sequence if not exists quote_seq;
+
+-- ── Kalyan customers: uploaded only (master file and current-year file), never created from email ──
+create table if not exists kalyan_customers (
+  org_id        bigint not null references organisations(id) on delete cascade,
+  custno        text not null,
+  book_id       text,
+  sub_type      text not null default '',
+  cust_type     text,
+  name          text not null default '',
+  title         text, first_name text, mid_name text, last_name text,
+  add1          text, add2 text, add3 text,
+  address       text not null default '',
+  city          text not null default '',
+  pin           text not null default '',
+  state         text not null default '',
+  state_norm    text,
+  country       text not null default '',
+  regdate       date,
+  year_start    text, year_end text,
+  disp_mode     text, force_mode text,
+  vpp_status    text, vppst text, next_yr_novpp text,
+  dead          boolean not null default false,
+  dead_reason   text,
+  mail_status   text,
+  rej_reason    text,
+  old_custno    text,
+  nqty          int, hqty int,
+  bal_amt       numeric, cur_year_bal numeric, last_year_bal numeric,
+  max_issue     text,
+  subbranch     text, postal_centre text,
+  alt_address   jsonb,
+  extra         jsonb not null default '{}',
+  in_master     boolean not null default false,
+  first_year    int,
+  source        text not null default 'master',
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  primary key (org_id, custno)
+);
+create index if not exists kalyan_customers_state_idx on kalyan_customers (org_id, state_norm);
+create table if not exists kalyan_customer_years (
+  org_id     bigint not null references organisations(id) on delete cascade,
+  custno     text not null,
+  year       int not null,
+  sub_type   text not null default '',
+  receipt_no text,
+  paid_on    date,
+  name       text not null default '',
+  address    text not null default '',
+  city       text not null default '',
+  state      text not null default '',
+  pin        text not null default '',
+  country    text not null default '',
+  batch_id   bigint references upload_batches(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (org_id, custno, year)
+);
+create index if not exists kalyan_customer_years_year_idx on kalyan_customer_years (org_id, year);
+create table if not exists kalyan_customer_stage (
+  batch_id bigint not null references upload_batches(id) on delete cascade,
+  rowno    int not null,
+  data     jsonb not null,
+  primary key (batch_id, rowno)
+);
+
+-- uploads: the two Kalyan customer files, and a review step before anything is applied
+alter table upload_batches drop constraint if exists upload_batches_kind_check;
+alter table upload_batches add constraint upload_batches_kind_check check (kind in ('orders','kalyan','books','prices','kalyan_master','kalyan_current'));
+alter table upload_batches drop constraint if exists upload_batches_status_check;
+alter table upload_batches add constraint upload_batches_status_check check (status in ('receiving','review','queued','processing','done','failed','cancelled'));
+alter table upload_batches add column if not exists review jsonb not null default '{}';
+alter table upload_batches add column if not exists options jsonb not null default '{}';
+` },
 ];

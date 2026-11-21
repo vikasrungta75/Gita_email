@@ -168,15 +168,15 @@ async function ingestOne(
 	await q(
 		`insert into emails (org_id, mailbox_id, conversation_id, provider_message_id, internet_message_id, provider_thread_id,
 			in_reply_to, dedup_key, content_hash, is_duplicate, duplicate_of, direction, from_address, from_name, to_addresses,
-			cc_addresses, subject, body_text, body_clean, snippet, has_attachments, importance, web_link, sent_at, is_automated)
-		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+			cc_addresses, subject, body_text, body_clean, snippet, has_attachments, importance, web_link, sent_at, is_automated, attachments)
+		 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
 		 on conflict (mailbox_id, provider_message_id) do nothing`,
 		[
 			org.id, mb.id, conversationId, m.providerMessageId, m.internetMessageId, m.threadId, m.inReplyTo, dk, ch,
 			isDuplicate, canonical?.id ?? null, direction, m.from.address, m.from.name.slice(0, 200),
 			m.to.map((r) => r.address), m.cc.map((r) => r.address), m.subject.slice(0, 1000),
 			m.bodyText.slice(0, 100_000), clean.slice(0, 20_000), snippet(clean || m.bodyText), m.hasAttachments,
-			m.importance, m.webLink, m.sentAt, automated,
+			m.importance, m.webLink, m.sentAt, automated, JSON.stringify(m.attachments || []),
 		],
 	);
 	if (staff.length) {

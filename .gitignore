@@ -2,11 +2,12 @@ node_modules
 dist
 .env
 .env.local
-.netlify
 *.log
 .DS_Store
 scratch/
-scratch/
 
-# Local edition: database files and backups stay on this computer
+# Database backups and uploaded keys stay on the machine
 data/
+backups/
+*.dump
+service-account*.json

@@ -190,7 +190,7 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 		],
 	);
 
-	await q(`update conversations set purposes = case when purposes_locked then purposes else $2 end, purposes_at=now() where id=$1`, [conversationId, purposes]);
+	await q(`update conversations set purposes = case when purposes_locked then purposes else $2 end, purposes_at=now(), needs_enrich=true where id=$1`, [conversationId, purposes]);
 	if (conv.customer_id) await refreshCustomerPurposes(conv.customer_id);
 	if (stock && external) await recordRequests(conv.org_id, conversationId, conv.customer_id, stock);
 
