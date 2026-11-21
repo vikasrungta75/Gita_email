@@ -11,6 +11,8 @@ import path from 'node:path';
 import { one, q, tx, databaseUrl } from '../db';
 import { HttpError, type Router } from '../http';
 import { audit } from '../audit';
+import { aiConfig } from '../ai/config';
+import { aiPaused, aiProvider, readySql } from '../ai/llm';
 import { requireRole } from '../auth';
 import { writeXlsx, readTable } from '../xlsx';
 import { headKey } from '../uploads/common';
@@ -50,7 +52,8 @@ const EMAIL_SORTS: Record<string, string> = {
 function emailWhere(orgId: number, qs: URLSearchParams) {
 	const params: unknown[] = [orgId];
 	const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
-	const where = ['c.org_id=$1', 'c.primary_group is not null'];
+	// only emails with a current AI analysis (or rules engine, when chosen); the rest wait in "Waiting for AI"
+	const where = ['c.org_id=$1', 'c.primary_group is not null', readySql('c')];
 	const tab = qs.get('tab') || 'all';
 	if (tab === 'not_for_reply') where.push('c.not_for_reply');
 	else {
@@ -105,16 +108,38 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		return { rows, total, offset, limit, sla: cfg.slaWorkingDays };
 	});
 
+	// emails waiting for the AI: not shown in the tabs until analysed
+	r.get('/api/emails/waiting', async (ctx) => {
+		const orgId = ctx.user!.orgId;
+		const all = aiConfig().analyseAll;
+		const limit = Math.min(Number(ctx.query.get('limit')) || 100, 500);
+		const offset = Math.max(0, Number(ctx.query.get('offset')) || 0);
+		const text = (ctx.query.get('q') || '').trim();
+		const params: unknown[] = [orgId, all];
+		const search = text ? (params.push(`%${text}%`), `and (c.subject ilike $${params.length} or exists (select 1 from emails e where e.conversation_id=c.id and (e.from_address ilike $${params.length} or e.from_name ilike $${params.length})))`) : '';
+		const W = `c.org_id=$1 and c.message_count > 0 and not ${readySql('c')} and ($2 or not c.is_automated) ${search}`;
+		const rows = await q<any>(
+			`select c.id, c.subject, c.last_inbound_at, c.last_message_at, c.message_count, c.is_automated, c.analysis_pending_reason as reason, c.ai_retry_at as tried_at,
+			        li.from_name, li.from_address, li.snippet, mb.addresses as mailboxes
+			   from conversations c
+			   left join lateral (select from_name, from_address, snippet from emails e where e.conversation_id=c.id and e.direction='inbound' and not e.is_duplicate order by sent_at desc limit 1) li on true
+			   left join lateral (select array_agg(m.address order by m.address) as addresses from mailboxes m where m.id = any(c.mailbox_ids)) mb on true
+			  where ${W} order by c.awaiting_reply desc, c.last_message_at desc limit ${limit} offset ${offset}`, params);
+		const total = (await one<any>(`select count(*)::int n from conversations c where ${W}`, params))!.n;
+		return { rows, total, offset, limit, aiOn: aiProvider() !== 'heuristic', paused: await aiPaused() };
+	});
+
 	r.get('/api/emails/meta', async (ctx) => {
 		const orgId = ctx.user!.orgId;
 		const counts = await q<any>(
-			`select coalesce(primary_group,'others') as g, not_for_reply as nfr, reply_status as s, count(*)::int as n from conversations where org_id=$1 and primary_group is not null group by 1,2,3`, [orgId]);
+			`select coalesce(c.primary_group,'others') as g, c.not_for_reply as nfr, c.reply_status as s, count(*)::int as n from conversations c where c.org_id=$1 and c.primary_group is not null and ${readySql('c')} group by 1,2,3`, [orgId]);
+		const waiting = (await one<any>(`select count(*)::int n from conversations c where c.org_id=$1 and c.message_count > 0 and not ${readySql('c')} and ($2 or not c.is_automated)`, [orgId, aiConfig().analyseAll]))!.n;
 		const mailboxes = await q<any>(`select id, address, provider, status from mailboxes where org_id=$1 order by address`, [orgId]);
 		const cfg = await emailConfig(orgId);
-		const openQ = (await one<any>(`select count(distinct x->>'key')::int as n from conversations c, jsonb_array_elements(c.open_questions) x where c.org_id=$1 and not c.not_for_reply and c.reply_status in ('pending','ready')`, [orgId]))!.n;
-		const bulk = (await one<any>(`select count(*)::int n from bulk_requests where org_id=$1 and stage not in ('closed')`, [orgId]))!.n;
+		const openQ = (await one<any>(`select count(distinct x->>'key')::int as n from conversations c, jsonb_array_elements(c.open_questions) x where c.org_id=$1 and not c.not_for_reply and c.reply_status in ('pending','ready') and ${readySql('c')}`, [orgId]))!.n;
+		const bulk = (await one<any>(`select count(*)::int n from bulk_requests b join conversations c on c.id=b.conversation_id where b.org_id=$1 and b.stage not in ('closed') and ${readySql('c')}`, [orgId]))!.n;
 		const views = await q<any>('select id, name, query from saved_views where user_id=$1 order by name', [ctx.user!.id]);
-		return { groups: GROUPS, subTags: SUBTAG_LABEL, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABEL[l] })), counts, mailboxes, syncDays: cfg.syncDays, openQuestions: openQ, bulkOpen: bulk, views, stages: STAGES, undoSeconds: UNDO_SECONDS };
+		return { groups: GROUPS, subTags: SUBTAG_LABEL, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABEL[l] })), counts, mailboxes, syncDays: cfg.syncDays, openQuestions: openQ, bulkOpen: bulk, waitingForAi: waiting, views, stages: STAGES, undoSeconds: UNDO_SECONDS };
 	});
 
 	r.get('/api/emails/:id', async (ctx) => {
@@ -138,7 +163,8 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		const mailboxes = await q<any>('select address from mailboxes where id = any($1::bigint[])', [c.mailbox_ids]);
 		const draft = await getDraftForConversation(id, ctx.user!.orgId);
 		const bulk = await one<any>('select id, stage, items, totals, value, quote_no, quote_at, notes, updated_at from bulk_requests where conversation_id=$1', [id]);
-		return { conversation: c, emails, mailboxes: mailboxes.map((m) => m.address), draft, bulk, facts: FACTS };
+		const ready = (await one<any>(`select ${readySql('c')} as ok from conversations c where c.id=$1`, [id]))!.ok;
+		return { conversation: c, emails, mailboxes: mailboxes.map((m) => m.address), draft: ready ? draft : null, bulk: ready ? bulk : null, facts: FACTS, ready };
 	});
 
 	/** Staff edit the group, sub-tags, criticality or "not for reply"; their choice is kept. */
@@ -303,7 +329,7 @@ Rules:
 			`select x->>'key' as key, x->>'text' as text, x->>'fact' as fact, x->>'kind' as kind, x->>'needsUpload' as needs_upload, x->>'group' as grp,
 			        count(*)::int as emails, (array_agg(c.id order by c.last_inbound_at desc))[1:5] as examples, max(c.last_inbound_at) as latest
 			   from conversations c, jsonb_array_elements(c.open_questions) x
-			  where c.org_id=$1 and not c.not_for_reply and c.reply_status in ('pending','ready')
+			  where c.org_id=$1 and not c.not_for_reply and c.reply_status in ('pending','ready') and ${readySql('c')}
 			  group by 1,2,3,4,5,6 order by count(*) desc, max(c.last_inbound_at) desc limit 500`, [ctx.user!.orgId]);
 		const byType = new Map<string, any>();
 		for (const r2 of rows) {
@@ -341,7 +367,7 @@ Rules:
 		const qs = ctx.query;
 		const params: unknown[] = [ctx.user!.orgId];
 		const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
-		const where = ['b.org_id=$1'];
+		const where = ['b.org_id=$1', readySql('c')];
 		const stages = (qs.get('stage') || '').split(',').filter((s) => STAGE_KEYS.includes(s));
 		if (stages.length) where.push(`b.stage = any(${p(stages)}::text[])`);
 		const t = (qs.get('q') || '').trim();

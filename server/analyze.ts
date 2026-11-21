@@ -1,7 +1,7 @@
 import { getPurposeDefs } from './ai/purposeDefs';
 import { upsertDraft } from './drafts';
 import { one, q } from './db';
-import { aiPaused, aiProvider, analyseThread } from './ai/llm';
+import { aiPaused, aiProvider, analyseThread, rulesRequested } from './ai/llm';
 import { aiConfig } from './ai/config';
 import { guessSubcategory, heuristicAnalyse } from './ai/heuristic';
 import { normaliseSubcategory } from './ai/taxonomy';
@@ -21,54 +21,73 @@ const MAX_MESSAGES = 14;
 
 export async function analysePending(orgId: number, limit = 25, deadline = Date.now() + 60_000) {
 	await getPurposeDefs(orgId);
-	// new and changed threads first; then every thread the rules engine analysed (because there was no AI, the AI
-	// failed, or it was an automated notification) is analysed again by the AI, newest and awaiting a reply first.
-	// Each thread is tried at most every 30 minutes, so a failing AI never loops.
+	const rules = rulesRequested();
 	const aiOn = aiProvider() !== 'heuristic' && !(await aiPaused());
+	// no AI available and the rules engine not chosen: everything waits for the AI
+	if (!rules && !aiOn) {
+		await markWaiting(orgId);
+		return 0;
+	}
 	const all = aiConfig().analyseAll;
-	const rows = await q<{ id: number; retry: boolean }>(
-		`select id, not needs_analysis as retry from conversations where org_id=$1 and message_count > 0
-		   and (needs_analysis or ($3 and analysis_model like 'remail-heuristic%' and ($4 or not is_automated)
-		     and (ai_retry_at is null or ai_retry_at < now() - interval '30 minutes')))
+	// new and changed threads first, newest and awaiting a reply first; with the AI, a thread it could not analyse is
+	// tried again after 10 minutes (never in a loop), and any thread the rules engine analysed earlier is redone
+	const rows = await q<{ id: number }>(
+		`select id from conversations where org_id=$1 and message_count > 0 and ($3 or $4 or not is_automated)
+		   and (needs_analysis or (not $3 and analysis_model like 'remail-heuristic%'))
+		   and ($3 or ai_retry_at is null or ai_retry_at < now() - interval '10 minutes')
 		 order by needs_analysis desc, awaiting_reply desc, last_message_at desc limit $2`,
-		[orgId, limit, aiOn, all],
+		[orgId, limit, rules, all],
 	);
 	let done = 0;
 	const customers = new Set<number>();
 	for (const r of rows) {
 		if (Date.now() > deadline) break;
-		if (aiOn) await q('update conversations set ai_retry_at=now() where id=$1', [r.id]);
+		if (!rules) await q('update conversations set ai_retry_at=now() where id=$1', [r.id]);
 		try {
 			const cid = await analyseConversation(r.id);
 			if (cid) customers.add(cid);
 			done++;
 		} catch (e: any) {
 			console.error('[analyse] conversation', r.id, e.message);
-			await q('update conversations set needs_analysis=false, rag_reason=$2 where id=$1', [r.id, `Analysis failed: ${e.message}`.slice(0, 300)]);
+			// stays waiting (it is not shown in Emails) and is tried again later; with the rules engine it is not retried
+			await q(`update conversations set analysis_pending_reason=$2${rules ? ', needs_analysis=false' : ''} where id=$1`, [r.id, `Analysis failed: ${e.message}`.slice(0, 300)]);
 		}
 	}
 	for (const c of customers) await updateCustomerHealth(c);
 	return done;
 }
 
+/** Records why the waiting emails are waiting, when no AI can be used. */
+async function markWaiting(orgId: number) {
+	const reason = await waitingReason();
+	await q(`update conversations set analysis_pending_reason=$2 where org_id=$1 and message_count > 0 and needs_analysis and analysis_pending_reason is distinct from $2`, [orgId, reason]);
+}
+
+async function waitingReason(): Promise<string> {
+	if (aiProvider() === 'heuristic') return 'No AI is set up: choose Gemini or Claude in Settings → AI';
+	const st = await one<any>('select paused_until, last_error from ai_state where id=1').catch(() => null);
+	if (st?.paused_until && new Date(st.paused_until).getTime() > Date.now()) return `The AI is paused until ${new Date(st.paused_until).toISOString().slice(0, 16).replace('T', ' ')} UTC${st.last_error ? `: ${String(st.last_error).slice(0, 160)}` : ''}`;
+	return st?.last_error ? `The AI could not analyse it: ${String(st.last_error).slice(0, 200)}` : 'Waiting for the AI';
+}
+
 /** How many threads the AI and the rules engine have analysed, and how many are waiting for the AI. */
 export async function analysisCoverage(orgId: number) {
 	const all = aiConfig().analyseAll;
 	const r = await one<any>(
-		`select count(*) filter (where analysed_at is not null)::int as analysed,
+		`select count(*) filter (where $2 or not is_automated)::int as total, count(*) filter (where analysed_at is not null)::int as analysed,
 		        count(*) filter (where analysis_model is not null and analysis_model not like 'remail-heuristic%')::int as by_ai,
 		        count(*) filter (where analysis_model like 'remail-heuristic%')::int as by_rules,
-		        count(*) filter (where analysis_model like 'remail-heuristic%' and ($2 or not is_automated))::int as waiting_for_ai,
+		        count(*) filter (where (needs_analysis or analysis_model like 'remail-heuristic%') and ($2 or not is_automated))::int as waiting_for_ai,
 		        count(*) filter (where needs_analysis)::int as new,
 		        count(*) filter (where ai_retry_at > now() - interval '30 minutes' and analysis_model like 'remail-heuristic%')::int as retry_later
 		   from conversations where org_id=$1 and message_count > 0`, [orgId, all]);
-	return { ...r, aiOn: aiProvider() !== 'heuristic', paused: await aiPaused(), analyseAll: all };
+	return { ...r, aiOn: aiProvider() !== 'heuristic', paused: await aiPaused(), analyseAll: all, rules: rulesRequested() };
 }
 
 /** Queue every thread the rules engine analysed for the AI at once (a button in Settings → AI). */
 export async function queueRulesForAi(orgId: number): Promise<number> {
 	const all = aiConfig().analyseAll;
-	const res = await q<any>(`update conversations set ai_retry_at=null where org_id=$1 and analysis_model like 'remail-heuristic%' and ($2 or not is_automated) returning id`, [orgId, all]);
+	const res = await q<any>(`update conversations set ai_retry_at=null where org_id=$1 and message_count > 0 and (needs_analysis or analysis_model like 'remail-heuristic%') and ($2 or not is_automated) returning id`, [orgId, all]);
 	return res.length;
 }
 
@@ -137,9 +156,15 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 
 	// Automated notifications never need an AI call — the rules engine is enough
 	// automated notifications go to the AI too, unless that is switched off in Settings → AI
-	const { analysis, model } = input.isAutomated && !aiConfig().analyseAll
+	const rules = rulesRequested();
+	const { analysis, model } = input.isAutomated && !aiConfig().analyseAll && rules
 		? { analysis: guess, model: 'remail-heuristic-v1' }
 		: await analyseThread(input, org.id);
+	// the rules engine answered (no AI, a pause or an error) but was not chosen: nothing is saved, the email waits
+	if (model.startsWith('remail-heuristic') && !rules) {
+		await q('update conversations set needs_analysis=true, analysis_pending_reason=$2 where id=$1', [conversationId, await waitingReason()]);
+		return null;
+	}
 	analysis.subcategory = normaliseSubcategory(analysis.business_category, analysis.subcategory);
 	// without the AI, the reply is the default template for the subgroup, with what the rules engine could fill in
 	if (model.startsWith('remail-heuristic') && analysis.requires_reply && !input.isAutomated) {
@@ -198,7 +223,7 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 	await q(
 		`update conversations set summary=$2, sentiment=$3, sentiment_score=$4, rag=$5, rag_reason=$6, customer_state=$7,
 		   urgency=$8, escalation_risk=$9, priority_score=$10, categories=$11, topics=$12, entities=$13, suggested_reply=$14,
-		   analysis_model=$15, analysed_at=now(), needs_analysis=false, awaiting_reply=$16, updated_at=now(),
+		   analysis_model=$15, analysed_at=now(), needs_analysis=false, analysis_pending_reason=null, awaiting_reply=$16, updated_at=now(),
 		   business_category = case when category_locked then business_category else $17 end,
 		   subcategory = case when category_locked or subcategory_locked then subcategory else $20 end,
 		   proposal = $18,

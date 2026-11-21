@@ -13,6 +13,7 @@
  */
 import { one, q } from '../db';
 import { signatureSettings } from './signature';
+import { readySql } from '../ai/llm';
 import { getOrg } from '../settings';
 import { upsertDraft } from '../drafts';
 import { stockContext, currentStock } from '../stock/stock';
@@ -493,7 +494,8 @@ export async function enrichConversation(conversationId: number): Promise<void> 
 export async function enrichPending(orgId: number, deadline = Date.now() + 60_000, limit = 400): Promise<number> {
 	let n = 0;
 	while (Date.now() < deadline - 2000 && n < limit) {
-		const rows = await q<any>(`select id from conversations where org_id=$1 and needs_enrich and analysed_at is not null order by last_message_at desc limit 25`, [orgId]);
+		// only emails with a current analysis (by the AI, or by the rules engine when chosen)
+		const rows = await q<any>(`select id from conversations c where c.org_id=$1 and c.needs_enrich and ${readySql('c')} order by c.last_message_at desc limit 25`, [orgId]);
 		if (!rows.length) break;
 		for (const r of rows) {
 			try { await enrichConversation(r.id); } catch (e: any) { console.error('[enrich]', r.id, e.message); await q('update conversations set needs_enrich=false where id=$1', [r.id]); }

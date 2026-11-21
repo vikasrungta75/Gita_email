@@ -26,6 +26,8 @@ import { HEAD_OFFICE } from '../server/branding';
 import { aiProvider, aiModel } from '../server/ai/llm';
 import { loadAiConfig } from '../server/ai/config';
 import { analysisCoverage } from '../server/analyze';
+import { migrations } from '../server/migrations';
+import { rulesRequested, clearAiPause } from '../server/ai/llm';
 
 // ── pricing rules ──
 const F = DEFAULTS.freight, D = DEFAULTS.discount;
@@ -494,6 +496,77 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 	const t2 = await call('GET', `/api/emails/${conv.id}`);
 	assert.equal(t2.data.emails.filter((e: any) => e.from_app).length, 0, 'once Gmail has it, it is shown once');
 	await q("delete from emails where provider_message_id='trail-test-1'"); await q('delete from reply_drafts where id=$1', [d.id]);
+}
+
+// ── AI only: the rules engine is not used unless chosen; waiting emails are not in the Emails tabs ──
+{
+	const envBefore = { p: process.env.AI_PROVIDER, g: process.env.GEMINI_API_KEY, a: process.env.ANTHROPIC_API_KEY };
+	const realFetch = globalThis.fetch;
+	let fail = false;
+	(globalThis as any).fetch = async (url: any, init: any) => {
+		if (!String(url).includes('generativelanguage')) return realFetch(url, init);
+		if (fail) return new Response(JSON.stringify({ error: { message: 'model overloaded' } }), { status: 500 });
+		return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"requires_reply": true, "business_category": "book_orders"}' }] } }], usageMetadata: {} }), { status: 200 });
+	};
+	try {
+		// the one-time clean-up: rules analysis and its untouched drafts go, edited drafts stay, the emails wait for the AI
+		const convs = await q<any>('select id from conversations where org_id=$1 and message_count > 0 order by id limit 2', [orgId]);
+		await q("update conversations set analysis_model='remail-heuristic-v1', needs_analysis=false where id = any($1)", [convs.map((c: any) => c.id)]);
+		await q("delete from reply_drafts where conversation_id = any($1)", [convs.map((c: any) => c.id)]);
+		await q(`insert into reply_drafts (org_id, conversation_id, body, generated_body, model, edited, status) values ($1, $2, 'rules draft', '', 'remail-heuristic-v1', false, 'draft'), ($1, $3, 'my edits', '', 'remail-heuristic-v1', true, 'draft')`, [orgId, convs[0].id, convs[1].id]);
+		const m018 = migrations.find((m) => m.id === '018_ai_only_remove_rules_analysis')!;
+		await q(m018.sql);
+		const after = await q<any>('select c.id, c.needs_analysis, c.analysis_model, (select count(*)::int from reply_drafts d where d.conversation_id=c.id) as drafts from conversations c where c.id = any($1) order by c.id', [convs.map((c: any) => c.id)]);
+		assert.ok(after.every((r: any) => r.needs_analysis && r.analysis_model === null), 'rules analysis removed, waiting for the AI');
+		assert.equal(after[0].drafts, 0, 'untouched rules draft removed'); assert.equal(after[1].drafts, 1, 'edited draft kept');
+
+		// no AI set up and the rules engine not chosen: nothing is analysed, everything waits, nothing shows in Emails
+		delete process.env.AI_PROVIDER; delete process.env.GEMINI_API_KEY; delete process.env.ANTHROPIC_API_KEY;
+		await q("delete from app_settings where key='ai'"); await loadAiConfig(true);
+		assert.equal(rulesRequested(), false);
+		await q('update conversations set needs_analysis=true, ai_retry_at=null where org_id=$1 and message_count > 0', [orgId]);
+		assert.equal(await analysePending(orgId, 100), 0, 'no rules analysis without being asked');
+		assert.equal((await one<any>("select count(*)::int n from conversations where org_id=$1 and analysis_model like 'remail-heuristic%' and not needs_analysis", [orgId])).n, 0);
+		const listNone = await call('GET', '/api/emails?tab=all&showSent=1');
+		assert.equal(listNone.data.total, 0, 'waiting emails are not in the Emails tabs');
+		const metaNone = await call('GET', '/api/emails/meta');
+		assert.equal(metaNone.data.counts.length, 0, 'nor in the counts'); assert.ok(metaNone.data.waitingForAi > 0);
+		const waitList = await call('GET', '/api/emails/waiting');
+		assert.equal(waitList.status, 200); assert.equal(waitList.data.total, metaNone.data.waitingForAi);
+		assert.match(waitList.data.rows[0].reason, /No AI is set up/);
+		const one1 = await call('GET', `/api/emails/${waitList.data.rows[0].id}`);
+		assert.equal(one1.data.ready, false); assert.equal(one1.data.draft, null, 'no reply is offered before the AI');
+
+		// the AI fails: still waiting (not rules), tried again later (failing before saving: saving starts the worker)
+		fail = true;
+		await call('PUT', '/api/settings/ai', { provider: 'gemini', geminiModel: 'gemini-3.5-flash-lite', geminiKey: 'AIzaTEST-not-a-real-key-1234567890abcd', analyseAll: true });
+		await q('update conversations set ai_retry_at=null where org_id=$1', [orgId]);
+		await q("update ai_state set paused_until=null where id=1").catch(() => {});
+		await analysePending(orgId, 3);
+		assert.equal((await one<any>("select count(*)::int n from conversations where org_id=$1 and analysis_model like 'remail-heuristic%'", [orgId])).n, 0, 'a failed AI call never leaves a rules analysis');
+		assert.equal((await call('GET', '/api/emails?tab=all&showSent=1')).data.total, 0);
+		fail = false;
+
+		// the AI analyses them: they appear in Emails with their reply
+		await q('update conversations set ai_retry_at=null where org_id=$1', [orgId]);
+		await clearAiPause();
+		let rounds = 0;
+		while ((await analysePending(orgId, 100)) > 0 && rounds++ < 5);
+		await enrichPending(orgId);
+		const listAi = await call('GET', '/api/emails?tab=all&showSent=1');
+		assert.ok(listAi.data.total > 0, 'analysed by the AI: shown');
+		assert.equal((await call('GET', '/api/emails/waiting')).data.total, 0, 'nothing waiting');
+		const shown = await call('GET', `/api/emails/${listAi.data.rows[0].id}`);
+		assert.equal(shown.data.ready, true);
+		// Rules only, when chosen, works as before
+		await call('PUT', '/api/settings/ai', { provider: 'heuristic' });
+		assert.equal(rulesRequested(), true);
+	} finally {
+		(globalThis as any).fetch = realFetch;
+		for (const [k, v] of [['AI_PROVIDER', envBefore.p], ['GEMINI_API_KEY', envBefore.g], ['ANTHROPIC_API_KEY', envBefore.a]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+		await q("delete from app_settings where key='ai'"); await loadAiConfig(true);
+		await q("update ai_state set paused_until=null where id=1").catch(() => {});
+	}
 }
 const before = await call('GET', '/api/system/reset');
 assert.ok(before.data.delete.Emails > 0);

@@ -270,7 +270,7 @@ function SystemStatus() {
 			<Card title="System status" accent={COLORS.teal}>
 				{!d ? <Loader /> : (
 					<>
-						<Status ok={d.ai.provider !== 'heuristic'} label="AI analysis" detail={d.ai.provider === 'heuristic' ? 'Built-in rules (add an AI key for full analysis)' : `${d.ai.provider} · ${d.ai.model}`} />
+						<Status ok={d.ai.provider !== 'heuristic' || d.ai.rules} label="AI analysis" detail={d.ai.provider === 'heuristic' ? (d.ai.rules ? 'Rules only (chosen in Settings → AI)' : 'No AI set up: every email waits for the AI. Choose Gemini or Claude in Settings → AI') : `${d.ai.provider} · ${d.ai.model}`} />
 						<Status ok={d.mailer !== 'none'} label="Email delivery for alerts and reports" detail={d.mailer === 'none' ? 'Not configured' : d.mailer} />
 						<Status ok={d.connectors.googleWorkspace} label="Google Workspace shared mailboxes" detail={d.connectors.googleWorkspace ? d.connectors.googleServiceAccount : 'Set GOOGLE_SERVICE_ACCOUNT_JSON'} />
 						<Status ok={d.connectors.google} label="Sign in with Google and own Gmail" detail={d.connectors.google ? 'Enabled' : 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET'} />

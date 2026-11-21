@@ -2592,3 +2592,5 @@ input[type='range'] { accent-color: #2563EB; }
 .pane-msg.answering { box-shadow: inset 3px 0 0 #6366F1; }
 .pane-msg .msg-body.folded { max-height: 320px; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
 .badge.on { background: #EEF2FF; color: #3730A3; }
+
+.waiting-note { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 10px 12px; margin: 8px 0; }

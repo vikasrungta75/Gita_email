@@ -19,7 +19,7 @@ import { parseEml } from './connectors/upload';
 import { ingestMessages } from './ingest';
 import { analyseConversation, analysePending, backfillHealthHistory, refreshCustomerPurposes, updateCustomerHealth } from './analyze';
 import { runTick, syncMailbox } from './worker';
-import { aiModel, aiPaused, aiProvider } from './ai/llm';
+import { aiModel, aiPaused, aiProvider, rulesRequested } from './ai/llm';
 import { appUrl, emailLayout, esc, mailerProvider, sendEmail } from './mailer';
 import { buildReport, runSchedule } from './reports';
 import { ask, SUGGESTED_QUESTIONS } from './copilot';
@@ -1230,7 +1230,7 @@ r.get('/api/system/status', async (ctx) => {
 		one<any>('select max(finished_at) t from sync_runs'),
 	]);
 	return {
-		ai: { provider: aiProvider(), model: aiModel() },
+		ai: { provider: aiProvider(), model: aiModel(), rules: rulesRequested() },
 		mailer: mailerProvider(),
 		auth: authMode(),
 		connectors: await providerStatus(ctx.user!.orgId),
@@ -1310,7 +1310,7 @@ r.get('/api/system/processing', async (ctx) => {
 		            from ai_usage where org_id=$1 and created_at > now() - interval '24 hours' and purpose='analysis'`, [org]),
 	]);
 	return {
-		ai: { provider: aiProvider(), model: aiModel(), ...ai, last24h: usage },
+		ai: { provider: aiProvider(), model: aiModel(), rules: rulesRequested(), ...ai, last24h: usage },
 		emails, threads, mailboxes, runs,
 		worker: await one<any>(`select until from worker_lease where name='tick'`).catch(() => null),
 	};

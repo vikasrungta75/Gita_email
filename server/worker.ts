@@ -11,6 +11,7 @@ import type { MailboxRow, SyncBatch } from './connectors/types';
 import { ingestMessages } from './ingest';
 import { buildProfiles } from './profiles';
 import { enrichCustomers } from './enrich';
+import { rulesRequested } from './ai/llm';
 import { analysePending, backfillHealthHistory, backfillPurposes, backfillSubcategories } from './analyze';
 import { evaluateSlaAlerts, processEscalations } from './alerts';
 import { runDueReports } from './reports';
@@ -109,8 +110,11 @@ export async function runTick(opts: { budgetMs?: number; mailboxId?: number; rep
 	log.analysed = analysed;
 	// facts, questions, completeness and criticality for every email that changed
 	log.enriched = await enrichPending(orgId, Math.min(deadline - 10_000, Date.now() + 90_000)).catch((e) => (console.error('[enrich]', e.message), 0));
-	log.subgroups = await backfillSubcategories(orgId).catch((e) => (console.error('[subgroups]', e.message), 0));
-	log.purposes = await backfillPurposes(orgId).catch((e) => (console.error('[purposes]', e.message), 0));
+	// rules-engine guesses fill gaps only when the rules engine is chosen; the AI sets these itself
+	if (rulesRequested()) {
+		log.subgroups = await backfillSubcategories(orgId).catch((e) => (console.error('[subgroups]', e.message), 0));
+		log.purposes = await backfillPurposes(orgId).catch((e) => (console.error('[purposes]', e.message), 0));
+	}
 	if (Date.now() < deadline - 20_000) log.profiles = await buildProfiles(orgId, deadline - 15_000).catch((e) => (console.error('[profiles]', e.message), null));
 	if (Date.now() < deadline - 20_000) log.enriched = await enrichCustomers(orgId, deadline - 15_000).catch((e) => (console.error('[enrich]', e.message), null));
 	// once a day, make sure history exists for every customer (cheap when already present)

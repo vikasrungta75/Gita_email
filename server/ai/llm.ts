@@ -30,6 +30,19 @@ export function aiProvider(): Provider {
 	return 'heuristic';
 }
 
+/** The rules engine is used only when it is chosen: Settings → AI "Rules only", or AI_PROVIDER=heuristic in .env. */
+export function rulesRequested(): boolean {
+	const c = aiConfig().provider;
+	if (c === 'heuristic') return true;
+	if (c === 'env') return (process.env.AI_PROVIDER || '').trim().toLowerCase() === 'heuristic';
+	return false;
+}
+
+/** SQL: the conversation has a current analysis that may be shown (by the AI, or by the rules engine when chosen). */
+export const readySql = (a = 'c') => (rulesRequested()
+	? `(not ${a}.needs_analysis and ${a}.analysis_model is not null)`
+	: `(not ${a}.needs_analysis and ${a}.analysis_model is not null and ${a}.analysis_model not like 'remail-heuristic%')`);
+
 export function aiModel(): string {
 	switch (aiProvider()) {
 		case 'gemini': return aiConfig().geminiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
@@ -416,7 +429,7 @@ export async function analyseThread(input: ThreadInput, orgId: number): Promise<
 		if (!args) throw new Error('No tool call in response');
 		return { analysis: coerce(JSON.parse(args), fallback), model };
 	} catch (e: any) {
-		console.error('[ai] analysis failed, using heuristic fallback:', e.message);
+		console.error(rulesRequested() ? '[ai] analysis failed, using the rules engine:' : '[ai] analysis failed, the email waits for the AI:', e.message);
 		await recordAiError(e);
 		return { analysis: fallback, model: 'remail-heuristic-v1 (fallback)' };
 	}
