@@ -25,6 +25,7 @@ import { composeOutgoing, splitBody, signatureSettings, DEFAULT_SIGNATURE_HI } f
 import { HEAD_OFFICE } from '../server/branding';
 import { aiProvider, aiModel } from '../server/ai/llm';
 import { loadAiConfig } from '../server/ai/config';
+import { analysisCoverage } from '../server/analyze';
 
 // ── pricing rules ──
 const F = DEFAULTS.freight, D = DEFAULTS.discount;
@@ -428,6 +429,71 @@ await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLo
 	assert.equal((await call('GET', '/api/settings/ai')).data.keys.gemini.source, 'env');
 	for (const [k, v] of [['AI_PROVIDER', envBefore.p], ['GEMINI_API_KEY', envBefore.g], ['ANTHROPIC_API_KEY', envBefore.a]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 	await q("delete from app_settings where key='ai'"); await loadAiConfig(true);
+}
+
+// ── threads the rules engine analysed are analysed again by the AI (a stand-in Gemini answers here) ──
+{
+	const realFetch = globalThis.fetch;
+	let calls = 0, fail = false;
+	(globalThis as any).fetch = async (url: any, init: any) => {
+		if (!String(url).includes('generativelanguage')) return realFetch(url, init);
+		calls++;
+		if (fail) return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 });
+		return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{}' }] } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 } }), { status: 200 });
+	};
+	try {
+		await q("update conversations set analysis_model='remail-heuristic-v1', ai_retry_at=null, needs_analysis=false where org_id=$1 and message_count > 0", [orgId]);
+		const auto = await one<any>('select id from conversations where org_id=$1 and message_count > 0 order by id limit 1', [orgId]);
+		await q('update conversations set is_automated=true where id=$1', [auto.id]);
+		const before = await analysisCoverage(orgId);
+		assert.equal(before.aiOn, false, 'no AI yet'); assert.ok(before.by_rules > 0);
+		assert.equal(await analysePending(orgId, 50), 0, 'without an AI nothing is analysed again');
+		// switch to Gemini in Settings, automated mail excluded
+		assert.equal((await call('PUT', '/api/settings/ai', { provider: 'gemini', geminiModel: 'gemini-3.5-flash-lite', geminiKey: 'AIzaTEST-not-a-real-key-1234567890abcd', analyseAll: false })).status, 200);
+		const cov = await call('GET', '/api/settings/ai/coverage');
+		assert.equal(cov.data.aiOn, true); const autoCount = (await one<any>('select count(*)::int n from conversations where org_id=$1 and message_count > 0 and is_automated', [orgId])).n;
+		assert.ok(autoCount >= 1); assert.equal(cov.data.waiting_for_ai, cov.data.by_rules - autoCount, 'automated threads wait only when analyseAll is on');
+		const n1 = await analysePending(orgId, 100);
+		assert.ok(n1 > 0 && calls > 0, 'rules threads were analysed by the AI');
+		const left = await one<any>("select count(*) filter (where analysis_model like 'remail-heuristic%')::int as rules, count(*) filter (where analysis_model = 'gemini-3.5-flash-lite')::int as ai from conversations where org_id=$1 and message_count > 0", [orgId]);
+		assert.equal(left.rules, autoCount, 'only the automated threads stay with the rules'); assert.ok(left.ai >= n1);
+		assert.equal((await one<any>('select analysis_model from conversations where id=$1', [auto.id])).analysis_model, 'remail-heuristic-v1');
+		// automated mail too
+		await call('PUT', '/api/settings/ai', { analyseAll: true });
+		await analysePending(orgId, 100);
+		assert.equal((await one<any>('select analysis_model from conversations where id=$1', [auto.id])).analysis_model, 'gemini-3.5-flash-lite', 'automated mail is analysed by the AI when switched on');
+		// a failing AI does not loop: each thread is tried once, then waits 30 minutes
+		await q("update conversations set analysis_model='remail-heuristic-v1', ai_retry_at=null where org_id=$1 and message_count > 0", [orgId]);
+		fail = true; calls = 0;
+		const n2 = await analysePending(orgId, 100);
+		const tried = calls;
+		assert.ok(n2 > 0);
+		assert.equal(await analysePending(orgId, 100), 0, 'not picked again straight away');
+		assert.equal(calls, tried);
+		const queued = await call('POST', '/api/settings/ai/reanalyse', {});
+		assert.equal(queued.status, 200); assert.ok(queued.data.queued > 0, 'the button queues them again at once');
+		fail = false;
+	} finally {
+		(globalThis as any).fetch = realFetch;
+		await q("delete from app_settings where key='ai'"); await loadAiConfig(true);
+		await q("update ai_state set paused_until=null where id=1").catch(() => {});
+	}
+}
+
+// ── the mail trail includes replies sent from Gita Mail that Gmail has not synced back yet, once ──
+{
+	const conv = await one<any>("select c.id, (select mailbox_id from emails e where e.conversation_id=c.id limit 1) as mb from conversations c where c.org_id=$1 and c.message_count > 0 order by c.id limit 1", [orgId]);
+	const d = await one<any>(`insert into reply_drafts (org_id, conversation_id, body, generated_body, status, sent_at, provider_message_id, send_mailbox_id, to_addresses, subject)
+		values ($1, $2, 'Dear reader,\nYour books were sent.\nRegards', '', 'sent', now(), 'trail-test-1', $3, '{reader@example.com}', 'Re: test') returning id`, [orgId, conv.id, conv.mb]);
+	const t1 = await call('GET', `/api/emails/${conv.id}`);
+	const app = t1.data.emails.filter((e: any) => e.from_app);
+	assert.equal(app.length, 1, 'the sent reply is in the trail'); const times = t1.data.emails.map((e: any) => new Date(e.sent_at).getTime());
+	assert.deepEqual(times, [...times].sort((a, b) => a - b), 'in date order');
+	await q(`insert into emails (org_id, mailbox_id, conversation_id, provider_message_id, direction, from_address, subject, body_text, body_clean, sent_at, dedup_key, content_hash)
+		values ($1, $2, $3, 'trail-test-1', 'outbound', 'books@gitapress.org', 'Re: test', 'Dear reader', 'Dear reader', now(), 'trail-test-1', 'trail-test-1')`, [orgId, conv.mb, conv.id]).catch((e) => { throw new Error(`insert email: ${e.message}`); });
+	const t2 = await call('GET', `/api/emails/${conv.id}`);
+	assert.equal(t2.data.emails.filter((e: any) => e.from_app).length, 0, 'once Gmail has it, it is shown once');
+	await q("delete from emails where provider_message_id='trail-test-1'"); await q('delete from reply_drafts where id=$1', [d.id]);
 }
 const before = await call('GET', '/api/system/reset');
 assert.ok(before.data.delete.Emails > 0);

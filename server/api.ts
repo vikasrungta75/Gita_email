@@ -1502,7 +1502,7 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 registerStage1(r, { kickUploads });
 registerRebuild(r, { kickWorker, kickUploads });
 registerData(r);
-registerAi(r);
+registerAi(r, { kickWorker });
 
 
 // ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──

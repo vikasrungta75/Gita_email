@@ -7,9 +7,10 @@ import { getOrg } from '../settings';
 import { aiConfig, describeAiConfig, loadAiConfig, saveAiConfig, testAi, MODELS } from '../ai/config';
 import { aiModel, aiProvider, clearAiPause } from '../ai/llm';
 import { stripOk } from '../drafts';
+import { analysisCoverage, queueRulesForAi } from '../analyze';
 import { outgoingFor, previewHtml, sampleOutgoing, signatureSettings } from '../email/signature';
 
-export function registerAi(r: Router) {
+export function registerAi(r: Router, deps: { kickWorker: () => Promise<unknown> }) {
 	r.get('/api/settings/ai', async (ctx) => {
 		requireRole(ctx.user, 'admin');
 		const c = await loadAiConfig(true);
@@ -20,12 +21,27 @@ export function registerAi(r: Router) {
 		const b = ctx.body || {};
 		let c;
 		try {
-			c = await saveAiConfig({ provider: b.provider, anthropicModel: b.anthropicModel, geminiModel: b.geminiModel, anthropicKey: b.anthropicKey, geminiKey: b.geminiKey }, ctx.user!.email);
+			c = await saveAiConfig({ provider: b.provider, anthropicModel: b.anthropicModel, geminiModel: b.geminiModel, anthropicKey: b.anthropicKey, geminiKey: b.geminiKey, analyseAll: b.analyseAll }, ctx.user!.email);
 		} catch (e: any) { throw new HttpError(400, e.message); }
 		await clearAiPause();
+		// with an AI now available, the threads the rules engine analysed are analysed again straight away
+		if (aiProvider() !== 'heuristic') { await queueRulesForAi(ctx.user!.orgId); deps.kickWorker().catch(() => {}); }
 		// the keys themselves are never written to the audit log
 		await audit(ctx, 'settings.ai', null, null, { provider: c.provider, anthropicModel: c.anthropicModel, geminiModel: c.geminiModel, anthropicKey: b.anthropicKey === null ? 'removed' : b.anthropicKey ? 'changed' : undefined, geminiKey: b.geminiKey === null ? 'removed' : b.geminiKey ? 'changed' : undefined });
 		return { ...describeAiConfig(c), effective: { provider: aiProvider(), model: aiModel() } };
+	});
+	r.get('/api/settings/ai/coverage', async (ctx) => {
+		requireRole(ctx.user, 'analyst');
+		return analysisCoverage(ctx.user!.orgId);
+	});
+	r.post('/api/settings/ai/reanalyse', async (ctx) => {
+		requireRole(ctx.user, 'admin');
+		if (aiProvider() === 'heuristic') throw new HttpError(400, 'Choose Claude or Gemini and save its key first');
+		const n = await queueRulesForAi(ctx.user!.orgId);
+		await clearAiPause();
+		await audit(ctx, 'analysis.reanalyse_with_ai', null, null, { threads: n });
+		deps.kickWorker().catch(() => {});
+		return { queued: n };
 	});
 	r.post('/api/settings/ai/test', async (ctx) => {
 		requireRole(ctx.user, 'admin');

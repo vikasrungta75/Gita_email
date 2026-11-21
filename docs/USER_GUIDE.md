@@ -20,12 +20,15 @@ The same email sent to two mailboxes appears once, with both mailboxes.
    answers to the reply**. Tick **for all emails** to keep the answer as a *standing answer*: every email with the same
    question is completed with it. Order numbers, Kalyan numbers, book codes (`6 x 10, 1388 x 2`) and places are looked up
    again when typed.
-2. **The original email** and its **attachments** (open in a new tab).
-3. **Facts**: green chips found, yellow chips missing.
-4. **The reply**: found facts green, missing ones yellow. **Edit text** to change it by hand. **Rewrite properly** (needs
+2. **Facts**: green chips found, yellow chips missing.
+3. **The reply**: found facts green, missing ones yellow. **Edit text** to change it by hand. **Rewrite properly** (needs
    an AI key) rewrites it cleanly in the reader's language; you see both side by side and choose. **Send** is possible
    when nothing is yellow: it waits 30 seconds with **Undo**, then sends from the mailbox the email came to, in the same
-   thread. **Send later** picks a date and time (it can be cancelled until then).
+   thread. **Send later** picks a date and time (it can be cancelled until then). **Preview as sent** shows the email
+   with the signature and logo.
+4. **The mail trail**: every email in the thread, newest first — the reader's emails, Gita Press replies (also those
+   just sent from Gita Mail) and internal notes, with their attachments. The email being answered is marked
+   **Replying to this**; long emails are folded, and the quoted text of earlier emails can be shown.
 
 Change the group, sub-tag or criticality from the drop-downs at the top: your choice is kept. **Not for reply** moves an
 email out of the way (automated, internal and supplier mail go there by themselves).
@@ -126,6 +129,10 @@ Book list (Suchi: the PDF or the Excel version; check summary first) · Book lin
 * **AI** (admins): Gemini, Claude, rules only, or as in .env; the model for each (the basic one first: Gemini 3.5
   Flash-Lite, Claude Haiku 5.5); the API keys, stored encrypted and never shown again; **Test the key and model**.
   Changes apply at once, without a restart. Settings → AI takes priority over .env.
+  **Analysis by AI** shows how many threads the AI and the rules engine analysed. The rules engine is only a stand-in:
+  once an AI is set up, every thread it analysed is analysed again by the AI in the background (newest and those
+  awaiting a reply first), automated notifications too unless that is switched off. Replies someone has edited and
+  groups set by hand are kept.
 * **Emails**: sync window (30/60/90 days) and interval; criticality and reply targets; the facts each group needs; which
   reason belongs to which group; the Kalyan year start; the Kalyan columns kept.
 * **Pending questions**: completeness by group, the weekly completeness trend, open questions by type, answer once for

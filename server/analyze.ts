@@ -1,7 +1,8 @@
 import { getPurposeDefs } from './ai/purposeDefs';
 import { upsertDraft } from './drafts';
 import { one, q } from './db';
-import { aiPaused, analyseThread } from './ai/llm';
+import { aiPaused, aiProvider, analyseThread } from './ai/llm';
+import { aiConfig } from './ai/config';
 import { guessSubcategory, heuristicAnalyse } from './ai/heuristic';
 import { normaliseSubcategory } from './ai/taxonomy';
 import { getTemplate, renderTemplate, templatesForGroup } from './templates';
@@ -20,19 +21,23 @@ const MAX_MESSAGES = 14;
 
 export async function analysePending(orgId: number, limit = 25, deadline = Date.now() + 60_000) {
 	await getPurposeDefs(orgId);
-	// new and changed threads first; threads that fell back to the rules engine are retried only while the AI is available
-	const retryFallbacks = !(await aiPaused());
-	const rows = await q<{ id: number }>(
-		`select id from conversations where org_id=$1 and message_count > 0
-		   and (needs_analysis or ($3 and analysis_model like '%(fallback)%' and analysed_at < now() - interval '30 minutes'
-		     and (awaiting_reply or last_message_at > now() - interval '30 days')))
-		 order by needs_analysis desc, last_message_at desc limit $2`,
-		[orgId, limit, retryFallbacks],
+	// new and changed threads first; then every thread the rules engine analysed (because there was no AI, the AI
+	// failed, or it was an automated notification) is analysed again by the AI, newest and awaiting a reply first.
+	// Each thread is tried at most every 30 minutes, so a failing AI never loops.
+	const aiOn = aiProvider() !== 'heuristic' && !(await aiPaused());
+	const all = aiConfig().analyseAll;
+	const rows = await q<{ id: number; retry: boolean }>(
+		`select id, not needs_analysis as retry from conversations where org_id=$1 and message_count > 0
+		   and (needs_analysis or ($3 and analysis_model like 'remail-heuristic%' and ($4 or not is_automated)
+		     and (ai_retry_at is null or ai_retry_at < now() - interval '30 minutes')))
+		 order by needs_analysis desc, awaiting_reply desc, last_message_at desc limit $2`,
+		[orgId, limit, aiOn, all],
 	);
 	let done = 0;
 	const customers = new Set<number>();
 	for (const r of rows) {
 		if (Date.now() > deadline) break;
+		if (aiOn) await q('update conversations set ai_retry_at=now() where id=$1', [r.id]);
 		try {
 			const cid = await analyseConversation(r.id);
 			if (cid) customers.add(cid);
@@ -44,6 +49,27 @@ export async function analysePending(orgId: number, limit = 25, deadline = Date.
 	}
 	for (const c of customers) await updateCustomerHealth(c);
 	return done;
+}
+
+/** How many threads the AI and the rules engine have analysed, and how many are waiting for the AI. */
+export async function analysisCoverage(orgId: number) {
+	const all = aiConfig().analyseAll;
+	const r = await one<any>(
+		`select count(*) filter (where analysed_at is not null)::int as analysed,
+		        count(*) filter (where analysis_model is not null and analysis_model not like 'remail-heuristic%')::int as by_ai,
+		        count(*) filter (where analysis_model like 'remail-heuristic%')::int as by_rules,
+		        count(*) filter (where analysis_model like 'remail-heuristic%' and ($2 or not is_automated))::int as waiting_for_ai,
+		        count(*) filter (where needs_analysis)::int as new,
+		        count(*) filter (where ai_retry_at > now() - interval '30 minutes' and analysis_model like 'remail-heuristic%')::int as retry_later
+		   from conversations where org_id=$1 and message_count > 0`, [orgId, all]);
+	return { ...r, aiOn: aiProvider() !== 'heuristic', paused: await aiPaused(), analyseAll: all };
+}
+
+/** Queue every thread the rules engine analysed for the AI at once (a button in Settings → AI). */
+export async function queueRulesForAi(orgId: number): Promise<number> {
+	const all = aiConfig().analyseAll;
+	const res = await q<any>(`update conversations set ai_retry_at=null where org_id=$1 and analysis_model like 'remail-heuristic%' and ($2 or not is_automated) returning id`, [orgId, all]);
+	return res.length;
 }
 
 export async function analyseConversation(conversationId: number): Promise<number | null> {
@@ -110,7 +136,8 @@ export async function analyseConversation(conversationId: number): Promise<numbe
 	}
 
 	// Automated notifications never need an AI call — the rules engine is enough
-	const { analysis, model } = input.isAutomated
+	// automated notifications go to the AI too, unless that is switched off in Settings → AI
+	const { analysis, model } = input.isAutomated && !aiConfig().analyseAll
 		? { analysis: guess, model: 'remail-heuristic-v1' }
 		: await analyseThread(input, org.id);
 	analysis.subcategory = normaliseSubcategory(analysis.business_category, analysis.subcategory);

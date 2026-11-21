@@ -5,10 +5,10 @@
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MdCheckCircle, MdErrorOutline, MdSave, MdWifiTethering } from 'react-icons/md';
+import { MdAutorenew, MdCheckCircle, MdErrorOutline, MdSave, MdWifiTethering } from 'react-icons/md';
 import { api } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
-import { Card, Loader } from '../../components/ui';
+import { Card, Loader, Switch } from '../../components/ui';
 import { COLORS, fmtDateTime } from '../../lib/format';
 
 const PROVIDERS = [
@@ -26,7 +26,7 @@ export default function AiSettings() {
 	const [f, setF] = useState<any>(null);
 	const [keys, setKeys] = useState<{ anthropic: string; gemini: string }>({ anthropic: '', gemini: '' });
 	const [tests, setTests] = useState<Record<string, { ok: boolean; message: string } | 'testing'>>({});
-	useEffect(() => { if (data) setF({ provider: data.provider, anthropicModel: data.anthropicModel || data.env.anthropicModel || data.models.anthropic[0].id, geminiModel: data.geminiModel || data.env.geminiModel || data.models.gemini[0].id }); }, [data]);
+	useEffect(() => { if (data) setF({ analyseAll: data.analyseAll !== false, provider: data.provider, anthropicModel: data.anthropicModel || data.env.anthropicModel || data.models.anthropic[0].id, geminiModel: data.geminiModel || data.env.geminiModel || data.models.gemini[0].id }); }, [data]);
 	const save = useMutation({
 		mutationFn: (extra: Record<string, unknown> = {}) => api('/settings/ai', { method: 'PUT', body: { ...f, anthropicKey: keys.anthropic || undefined, geminiKey: keys.gemini || undefined, ...extra } }),
 		onSuccess: (r: any) => { qc.setQueryData(['settings-ai'], r); qc.invalidateQueries({ queryKey: ['system-status'] }); setKeys({ anthropic: '', gemini: '' }); toast(`AI settings saved: ${NAME[r.effective.provider] || r.effective.provider}${r.effective.provider === 'heuristic' ? '' : ` · ${r.effective.model}`}`); },
@@ -86,8 +86,41 @@ export default function AiSettings() {
 					))}
 				</div>
 				{missingKey && <div className="small mt-8" style={{ color: 'var(--amber)' }}>Enter the {NAME[wanted!]} key below before saving, or the rules engine is used.</div>}
+				<div className="mt-16"><Switch checked={f.analyseAll} onChange={(v) => setF({ ...f, analyseAll: v })} label="Analyse every email with the AI, automated notifications (newsletters, payment and delivery messages) too" /></div>
 			</Card>
+			<Coverage />
 			<div className="grid g-2">{provBlock('gemini')}{provBlock('anthropic')}</div>
 		</div>
+	);
+}
+
+/** How many threads the AI and the rules engine analysed; threads the rules engine analysed are analysed again by the AI. */
+function Coverage() {
+	const toast = useToast();
+	const qc = useQueryClient();
+	const { data } = useQuery({ queryKey: ['ai-coverage'], queryFn: () => api('/settings/ai/coverage'), refetchInterval: 15_000 });
+	const go = useMutation({ mutationFn: () => api('/settings/ai/reanalyse', { body: {} }), onSuccess: (r: any) => { qc.invalidateQueries({ queryKey: ['ai-coverage'] }); toast(`${r.queued} threads queued for the AI; they are analysed in the background, newest and those awaiting a reply first`); }, onError: (e: any) => toast(e.message, 'error') });
+	if (!data) return null;
+	const total = data.by_ai + data.by_rules;
+	const pct = total ? Math.round((100 * data.by_ai) / total) : 0;
+	return (
+		<Card title="Analysis by AI" accent={COLORS.teal}
+			sub="The rules engine is only a stand-in: every thread it analysed (because there was no AI key, the AI was unavailable, or it was an automated notification) is analysed again by the AI in the background. Replies someone has edited and groups set by hand are kept."
+			actions={<button className="btn sm" disabled={go.isPending || !data.aiOn || !data.waiting_for_ai} onClick={() => go.mutate()}><MdAutorenew /> {go.isPending ? 'Queuing…' : 'Analyse them with AI now'}</button>}>
+			<div className="row gap-16 wrap small">
+				<span><b>{total.toLocaleString('en-IN')}</b> threads analysed</span>
+				<span style={{ color: 'var(--green)' }}><b>{data.by_ai.toLocaleString('en-IN')}</b> by the AI ({pct}%)</span>
+				<span style={{ color: data.by_rules ? 'var(--amber)' : undefined }}><b>{data.by_rules.toLocaleString('en-IN')}</b> by the rules engine</span>
+				{data.new > 0 && <span><b>{data.new.toLocaleString('en-IN')}</b> new, not analysed yet</span>}
+			</div>
+			<div className="progress mt-8" aria-label={`${pct}% analysed by AI`}><div style={{ width: `${pct}%` }} /></div>
+			<div className="xs faint mt-8">
+				{!data.aiOn ? 'No AI is set up, so nothing can be analysed again yet: choose Gemini or Claude above and save its key.'
+					: data.paused ? 'The AI is paused (a quota or key problem); analysis continues by itself once it is available again.'
+						: data.waiting_for_ai ? `${data.waiting_for_ai.toLocaleString('en-IN')} waiting for the AI${data.retry_later ? `, ${data.retry_later.toLocaleString('en-IN')} of them tried in the last 30 minutes and retried later` : ''}. They are worked through in the background, newest and those awaiting a reply first.`
+							: 'Every thread has been analysed by the AI.'}
+				{!data.analyseAll && data.by_rules > data.waiting_for_ai ? ` Automated notifications stay with the rules engine (switched off above).` : ''}
+			</div>
+		</Card>
 	);
 }

@@ -1131,4 +1131,9 @@ create table if not exists app_settings (
   updated_at timestamptz not null default now()
 );
 ` },
+{ id: '017_ai_reanalysis', sql: String.raw`
+-- threads analysed by the rules engine are analysed again by the AI; this is when the AI was last tried for one
+alter table conversations add column if not exists ai_retry_at timestamptz;
+create index if not exists conversations_rules_idx on conversations (org_id) where analysis_model like 'remail-heuristic%';
+` },
 ];

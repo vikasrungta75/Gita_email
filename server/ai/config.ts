@@ -10,7 +10,7 @@ import { one, q } from '../db';
 import { encrypt, decrypt } from '../crypto';
 
 export type ChosenProvider = 'env' | 'anthropic' | 'gemini' | 'heuristic';
-export interface AiConfig { provider: ChosenProvider; anthropicModel: string; geminiModel: string; anthropicKey: string; geminiKey: string; updatedAt?: string; updatedBy?: string }
+export interface AiConfig { provider: ChosenProvider; anthropicModel: string; geminiModel: string; anthropicKey: string; geminiKey: string; analyseAll: boolean; updatedAt?: string; updatedBy?: string }
 
 export const MODELS = {
 	anthropic: [
@@ -25,7 +25,7 @@ export const MODELS = {
 	],
 };
 
-const EMPTY: AiConfig = { provider: 'env', anthropicModel: '', geminiModel: '', anthropicKey: '', geminiKey: '' };
+const EMPTY: AiConfig = { provider: 'env', anthropicModel: '', geminiModel: '', anthropicKey: '', geminiKey: '', analyseAll: true };
 let current: AiConfig = { ...EMPTY };
 let loadedAt = 0;
 
@@ -47,6 +47,8 @@ export async function loadAiConfig(force = false): Promise<AiConfig> {
 		geminiModel: String(v.geminiModel || ''),
 		anthropicKey: dec(v.anthropicKey),
 		geminiKey: dec(v.geminiKey),
+		// every email goes to the AI, automated notifications too, unless switched off
+		analyseAll: v.analyseAll !== false,
 		updatedAt: v.updatedAt,
 		updatedBy: v.updatedBy,
 	};
@@ -55,7 +57,7 @@ export async function loadAiConfig(force = false): Promise<AiConfig> {
 }
 
 /** Keys: a new value replaces the saved one, '' keeps it, null removes it. */
-export async function saveAiConfig(input: { provider?: string; anthropicModel?: string; geminiModel?: string; anthropicKey?: string | null; geminiKey?: string | null }, by: string): Promise<AiConfig> {
+export async function saveAiConfig(input: { provider?: string; anthropicModel?: string; geminiModel?: string; anthropicKey?: string | null; geminiKey?: string | null; analyseAll?: boolean }, by: string): Promise<AiConfig> {
 	const v = await row();
 	const next: any = { ...v };
 	if (input.provider !== undefined) {
@@ -63,6 +65,7 @@ export async function saveAiConfig(input: { provider?: string; anthropicModel?: 
 		next.provider = input.provider;
 	}
 	const model = (m: unknown) => { const s = String(m ?? '').trim(); if (s && !/^[a-z0-9][a-z0-9._:/-]{1,80}$/i.test(s)) throw new Error(`"${s}" is not a model name`); return s; };
+	if (input.analyseAll !== undefined) next.analyseAll = !!input.analyseAll;
 	if (input.anthropicModel !== undefined) next.anthropicModel = model(input.anthropicModel);
 	if (input.geminiModel !== undefined) next.geminiModel = model(input.geminiModel);
 	for (const k of ['anthropicKey', 'geminiKey'] as const) {
@@ -87,6 +90,7 @@ export function describeAiConfig(c: AiConfig) {
 		provider: c.provider,
 		anthropicModel: c.anthropicModel,
 		geminiModel: c.geminiModel,
+		analyseAll: c.analyseAll,
 		keys: { anthropic: key(c.anthropicKey, process.env.ANTHROPIC_API_KEY), gemini: key(c.geminiKey, process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) },
 		env: { provider: process.env.AI_PROVIDER || '', anthropicModel: process.env.ANTHROPIC_MODEL || '', geminiModel: process.env.GEMINI_MODEL || '' },
 		updatedAt: c.updatedAt || null,
