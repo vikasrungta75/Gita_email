@@ -56,15 +56,53 @@ and moves the request to In preparation; sending the reply moves it to Quote sen
 * **Current year customers**: upload the current-year file (Duration, No, Name, Address, Location, State, Country, Post
   code, then receipt number and payment date). The year comes from the latest payment date; change it before confirming.
 * Uploads only add and update; net new customers in a current-year upload are added to all customers too.
-* **Dashboard**: total, active this year, new, renewed, lost, payments by month, by subscription, dispatch mode, state
-  and city. Select a figure to open its list; download any list as Excel or CSV.
+* **Dashboard**, for **All customers** or **Current year customers** and any year:
+  * Current year: active (with the change on the year before), new, renewed, came back, lost, retention, payments in the
+    last month; readers each year (new, renewed, came back, and lost below the line); retention by year; payments by
+    month against the same month a year earlier; subscription mix by year; the year by subscription and dispatch mode.
+  * All customers: total, live and inactive, life members, 5-year and 1-year, registered this year, outside India, balance
+    due; registrations by year; length of membership; dispatch mode; why customers are inactive.
+  * Definitions: *new* = first year ever; *renewed* = also active the year before; *came back* = not the year before but
+    earlier; *lost* = active the year before, not this year; *retention* = renewed ÷ active the year before.
+* **Geo spread**: India by state for All customers (customers, registered in a year, life members, inactive %) or Current
+  year customers (active, new, renewed, lost, growth on the year before, retention). The year slider and **Play** step
+  through the years. Select a state on the map or in the ranked list (with the change on the year before) to see its
+  trend by year, top cities and top PIN areas, and **Open the customers**. Customers outside India are listed by country.
+  The state comes from the PIN code where there is one. Jammu & Kashmir and Ladakh are one shape on the map; the hover
+  shows each. State outlines: DataMeet, CC BY 2.5 India.
+* Select any figure or row to open the customer list behind it; download any list as Excel or CSV.
 
-## Stock and tracking
+## Full-data tables (Stock, Tracking, Book list, Book links)
 
-Upload Book orders, Branch stock, Main/retail/semi-finished stock and Kalyan tracking in their tabs. Each upload shows a
-**check summary** (rows, new and known, dates, problems, comparison with the previous upload) and is applied only when
-you select **Confirm**. Replies always use the latest upload; every upload and its original file are kept. **All data**
-lists every upload; the table icon browses its rows.
+Every **All data** view is the same table: search; select a column heading to sort (again to reverse); a filter on any
+column (the values with counts) and **Ranges** for numbers and dates; **Columns** to show or hide columns; totals of the
+number columns; **Excel** and **CSV** download exactly what is filtered. The filters are part of the address, so a view
+can be bookmarked or shared, and dashboards open it already filtered.
+
+## Stock
+
+**Branch stock** and **Main, retail and semi-finished (Gorakhpur)**, each with:
+* **Dashboard**: titles and copies in stock, stock value, copies out in the period, stock date; stock by branch (and a map
+  of branch stock by state) or main / retail / semi-finished; books moving most; books that may run out (less stock than
+  went out in the period); best sellers with no stock at Gorakhpur (with copies being made); by language and size;
+  Suchi titles not in stock and codes in stock but not in the Suchi.
+* **All data**: the latest stock of every location, one row per godown and book.
+* **Upload and history**: the Tally Stock Summary; a check summary first; every upload and its original file.
+
+**All stock uploads** lists every stock upload.
+
+## Tracking
+
+**Book orders** and **Kalyan tracking**, each with:
+* **Book orders dashboard** (last 7, 30, 90 days, a year or all): orders, order value, average order, buyers and repeat
+  buyers, orders not marked delivered and how long ago they were placed, damaged tracking numbers; orders by day, week or
+  month; a map of orders (or value) by state from the delivery PIN code; top states and cities; status, delivery partner,
+  payment, site, order value and day of the week.
+* **Kalyan tracking dashboard**: dispatches, readers, share sent by registered post, the latest issue, readers in the
+  previous issue not (yet) in the latest; dispatches by issue and by day (registered and ordinary); a map of readers (or
+  registered %) by state; states, cities and subscriptions.
+* **All data** and **Upload and history** as for stock. Each upload shows a check summary and is applied only when you
+  select **Confirm**. Replies always use the latest data.
 
 ## Master data
 
@@ -72,6 +110,12 @@ Locations · Others (delivery partners and tracking sites, Kalyan subscription t
 statuses, state spellings) · Bank details (admin only, audited) with the payment QR · Discount details · Freight charges ·
 Book list (Suchi: the PDF or the Excel version; check summary first) · Book links (gitapress.org and Amazon) · Books
 (combined): one row per code with both, editable; a price or size edited here is kept when the next Suchi is uploaded.
+
+**Book list (Suchi)** and **Book links** each have a **Dashboard**, **All data** and **Upload and history**:
+* Suchi: titles, sets, best sellers, typical price, titles in and out of stock at Gorakhpur, titles with an online link;
+  by size, language, price, pages and set; best sellers with no stock.
+* Book links: gitapress.org and Amazon coverage, books with no link, by language; best sellers with no online link. The
+  links open from the table.
 
 ## Settings
 

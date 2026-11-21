@@ -252,32 +252,6 @@ export async function listKalyanCustomers(orgId: number, o: ListOpts) {
 	return { rows, total, offset, limit };
 }
 
-export async function kalyanDashboard(orgId: number, year: number) {
-	const totals = await one<any>(
-		`select count(*)::int as total, count(*) filter (where dead)::int as inactive, count(*) filter (where source='current')::int as from_current
-		   from kalyan_customers where org_id=$1`, [orgId]);
-	const years = await q<any>(
-		`with y as (select custno, year from kalyan_customer_years where org_id=$1),
-		      f as (select custno, min(year) as first from y group by 1)
-		 select y.year,
-		        count(*)::int as active,
-		        count(*) filter (where f.first = y.year)::int as new,
-		        count(*) filter (where exists (select 1 from y p where p.custno=y.custno and p.year=y.year-1))::int as repeat,
-		        (select count(*) from y p where p.year=y.year-1 and not exists (select 1 from y c where c.custno=p.custno and c.year=y.year))::int as lost
-		   from y join f on f.custno=y.custno group by y.year order by y.year`, [orgId]);
-	const registered = await q<any>(`select extract(year from regdate)::int as year, count(*)::int as n from kalyan_customers where org_id=$1 and regdate is not null group by 1 order by 1`, [orgId]);
-	const byType = await q<any>(`select coalesce(nullif(k.sub_type,''),'?') as k, count(*)::int as n, count(*) filter (where exists (select 1 from kalyan_customer_years y where y.org_id=k.org_id and y.custno=k.custno and y.year=$2))::int as active from kalyan_customers k where k.org_id=$1 group by 1 order by 2 desc`, [orgId, year]);
-	const byMode = await q<any>(`select coalesce(nullif(disp_mode,''),'Not stated') as k, count(*)::int as n from kalyan_customers where org_id=$1 group by 1 order by 2 desc`, [orgId]);
-	const byState = await q<any>(
-		`select coalesce(k.state_norm, nullif(k.state,''), 'Not stated') as k, count(*)::int as n,
-		        count(*) filter (where exists (select 1 from kalyan_customer_years y where y.org_id=k.org_id and y.custno=k.custno and y.year=$2))::int as active
-		   from kalyan_customers k where k.org_id=$1 group by 1 order by 2 desc limit 40`, [orgId, year]);
-	const byCity = await q<any>(`select initcap(lower(city)) as k, count(*)::int as n from kalyan_customer_years where org_id=$1 and year=$2 and city <> '' group by 1 order by 2 desc limit 25`, [orgId, year]);
-	const payments = await q<any>(`select to_char(paid_on, 'YYYY-MM') as k, count(*)::int as n from kalyan_customer_years where org_id=$1 and year=$2 and paid_on is not null group by 1 order by 1`, [orgId, year]);
-	const cur = years.find((y) => y.year === year) || { active: 0, new: 0, repeat: 0, lost: 0 };
-	return { year, totals, current: cur, years, registered, byType, byMode, byState, byCity, payments };
-}
-
 export const KALYAN_EXPORT_HEADER = ['Customer no', 'Name', 'Subscription', 'Address', 'City', 'PIN', 'State', 'Country', 'Registered', 'Dispatch mode', 'Inactive', 'Inactive reason', 'Mail status',
 	'Year start', 'Year end', 'First year', 'Last active year', 'Receipt no', 'Payment date', 'Source'];
 export const kalyanExportRows = (rows: any[]) => rows.map((r) => [r.custno, r.name, r.sub_type, r.address, r.city, r.pin, r.state, r.country, r.regdate || '', r.disp_mode || '', r.dead ? 'Yes' : '',

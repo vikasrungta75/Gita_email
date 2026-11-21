@@ -2565,3 +2565,19 @@ mark.fact-missing { background: #FEF08A; color: inherit; padding: 0 3px; border-
 .bar-cell { height: 8px; background: #F1F5F9; border-radius: 4px; overflow: hidden; div { height: 100%; background: var(--teal); } }
 .pane-tags select.input, .quote-builder summary select.input, .send-bar select.input { width: auto; max-width: 260px; }
 .email-layout.pane-right.has-open .email-table td .row-between { min-width: 0; }
+
+// ── data tables, dashboards and the India map (Stock, Tracking, Suchi, Customer database) ──
+table.table.sticky thead th { position: sticky; top: 0; z-index: 2; background: #F8FAFC; box-shadow: 0 1px 0 #E2E8F0; }
+table.table.sticky tfoot td { position: sticky; bottom: 0; background: #F8FAFC; box-shadow: 0 -1px 0 #E2E8F0; }
+table.table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; &:hover { color: var(--text-1, #0F172A); } }
+table.table td.wrap-cell { white-space: normal; min-width: 220px; max-width: 420px; }
+.chip.on { background: #EEF2FF; color: #3730A3; gap: 4px; .btn { padding: 0; height: 16px; min-height: 16px; } }
+.btn.icon.xs { width: 18px; height: 18px; min-height: 18px; padding: 0; font-size: 12px; }
+.india-map { width: 100%; border-radius: 8px; background: #F8FAFC; z-index: 0; }
+.india-map.leaflet-container { font: inherit; }
+.map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; border: 1px solid #E2E8F0; } }
+.leaflet-tooltip.map-tip { font-size: 12px; line-height: 1.4; padding: 6px 8px; border-radius: 6px; border: 1px solid #E2E8F0; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12); max-width: 280px; white-space: normal; }
+.leaflet-container .leaflet-control-attribution { font-size: 10px; background: rgba(255, 255, 255, 0.8); }
+input[type='range'] { accent-color: #2563EB; }
+
+.data-search { position: relative; flex: 0 1 300px; min-width: 220px; svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-3); z-index: 1; } input.input { width: 100%; padding-left: 30px; } }

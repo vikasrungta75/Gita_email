@@ -1,4 +1,4 @@
-> **Note (November 2026 rebuild):** the stock planning screens described here (Inventory → Stock and sales) are switched off for now and the customer tiers are no longer used; their code is kept so they can return. Uploads now live in **Stock and tracking**, and the book list in **Admin → Master data**. See [USER_GUIDE.md](USER_GUIDE.md).
+> **Note (November 2026 rebuild):** the stock planning screens described here (Inventory → Stock and sales) are switched off for now and the customer tiers are no longer used; their code is kept so they can return. Uploads now live in **Stock** and **Tracking**, and the book list in **Admin → Master data**. See [USER_GUIDE.md](USER_GUIDE.md).
 
 # Stock, addresses, reasons for contacting and inventory
 

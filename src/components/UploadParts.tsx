@@ -1,45 +1,21 @@
 /**
- * Stock and tracking: the files that change often. One tab each for Book orders (tracking), Branch stock,
- * Main / retail / semi-finished stock (Gorakhpur) and Kalyan tracking, plus All data to browse every upload.
- * Each upload shows a check summary first; nothing is applied until it is confirmed. Every upload and its
- * original file are kept, and replies always use the latest one.
+ * Upload pieces shared by Stock, Tracking and the Customer database: the upload slots (read here and sent in parts,
+ * or checked first for Tally stock), the check summary with Confirm and Cancel, the upload history with the original
+ * files, and a viewer for the rows of one upload. Nothing is applied until it is confirmed.
  */
 import { useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MdCheck, MdClose, MdDownload, MdSearch, MdTableView, MdUploadFile } from 'react-icons/md';
 import { api, qs } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Card, Empty, Loader, Modal, PageHead, Segmented } from '../components/ui';
+import { Card, Empty, Loader, Modal } from './ui';
 import { fileToBase64, num } from '../lib/purposes';
 import { COLORS, ago, fmtDate, fmtDateTime } from '../lib/format';
 import { download, sendBatch } from '../lib/files';
 
-const TABS = [
-	{ v: 'orders', l: 'Book orders' }, { v: 'branch', l: 'Branch stock' }, { v: 'hq', l: 'Main, retail and semi-finished' }, { v: 'kalyan', l: 'Kalyan tracking' }, { v: 'all', l: 'All data' },
-];
 export const KIND: Record<string, string> = { orders: 'Book orders (tracking)', kalyan: 'Kalyan tracking', books: 'Book links', prices: 'Price list', hq: 'Main, retail and semi-finished stock', branch: 'Branch stock', kalyan_master: 'Kalyan customers (all)', kalyan_current: 'Kalyan customers (current year)' };
 export const STATUS: Record<string, string> = { receiving: 'Arriving', review: 'Waiting for your confirmation', queued: 'Waiting to be applied', processing: 'Being applied', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
-
-export default function StockTracking() {
-	const [sp, setSp] = useSearchParams();
-	const tab = TABS.find((t) => t.v === sp.get('tab'))?.v || 'orders';
-	const { data, isLoading } = useQuery({ queryKey: ['uploads', 'all'], queryFn: () => api('/uploads'), refetchInterval: (q: any) => (q.state.data?.active?.some((a: any) => a.status !== 'review') ? 4000 : false) });
-	return (
-		<>
-			<PageHead kw="Stock" rest="and tracking" sub="The files that change often. Each upload shows a check summary before anything is applied; every upload and its original file are kept, and replies always use the latest one." />
-			<div className="mb-16" style={{ overflowX: 'auto' }}><Segmented value={tab} options={TABS} onChange={(v) => setSp({ tab: v }, { replace: true })} /></div>
-			{isLoading || !data ? <Loader /> : tab === 'all' ? <AllData history={data.history} /> : (
-				<>
-					{(tab === 'orders' || tab === 'kalyan') && <BatchSlot kind={tab} active={data.active} />}
-					{(tab === 'hq' || tab === 'branch') && <StockSlot slot={tab} />}
-					<LatestFor kind={tab} history={data.history} kinds={data.kinds} />
-				</>
-			)}
-		</>
-	);
-}
 
 const HELP: Record<string, string> = {
 	orders: 'The Gita Press orders export (CSV or Excel): orderId, orderMongoId, siteCategory, customerName, email, phone, totalAmount, subTotal, postage, paymentMethod, orderStatusCode, orderStatusLabel, paymentStatus, createdAt, trackingId, deliveryPartner, shipFirstName, shipLastName, shipAddress1, shipAddress2, shipCity, shipPincode, shipMobile. Orders are updated by order number; a change of status or tracking number is kept in the order\'s history.',
@@ -130,7 +106,7 @@ export function BatchReview({ b }: { b: any }) {
 }
 
 /** Tally stock: checked first (summary and comparison with the last upload), then saved. */
-function StockSlot({ slot }: { slot: 'hq' | 'branch' }) {
+export function StockSlot({ slot }: { slot: 'hq' | 'branch' }) {
 	const { can } = useAuth();
 	const toast = useToast();
 	const qc = useQueryClient();
@@ -168,7 +144,7 @@ function StockSlot({ slot }: { slot: 'hq' | 'branch' }) {
 	);
 }
 
-function LatestFor({ kind, history, kinds }: { kind: string; history: any[]; kinds: any }) {
+export function LatestFor({ kind, history, kinds }: { kind: string; history: any[]; kinds: any }) {
 	const rows = history.filter((h) => h.kind === kind);
 	const latest = rows.find((h) => h.status === 'done' && !h.deleted_at);
 	const [view, setView] = useState<any>(null);
@@ -180,7 +156,7 @@ function LatestFor({ kind, history, kinds }: { kind: string; history: any[]; kin
 	);
 }
 
-function UploadsTable({ rows, onView, showKind }: { rows: any[]; onView: (u: any) => void; showKind?: boolean }) {
+export function UploadsTable({ rows, onView, showKind }: { rows: any[]; onView: (u: any) => void; showKind?: boolean }) {
 	const toast = useToast();
 	const fileOf = (u: any) => download(u.key.startsWith('s') ? `/stock/uploads/${u.id}/file` : `/uploads/${u.id}/file`, u.file_name).catch((e) => toast(e.message, 'error'));
 	return (
@@ -205,13 +181,13 @@ function UploadsTable({ rows, onView, showKind }: { rows: any[]; onView: (u: any
 	);
 }
 
-function RowsViewer({ u, onClose }: { u: any; onClose: () => void }) {
+export function RowsViewer({ u, onClose }: { u: any; onClose: () => void }) {
 	const [q, setQ] = useState('');
 	const [offset, setOffset] = useState(0);
 	const { data, isLoading, isFetching } = useQuery({ queryKey: ['data-rows', u.kind, u.id, q, offset], queryFn: () => api(`/data/${u.kind}/${u.id}/rows${qs({ q, offset, limit: 100 })}`), placeholderData: keepPreviousData });
 	return (
 		<Modal wide title={`${KIND[u.kind]}: ${u.file_name}`} onClose={onClose}>
-			<div className="search-box mb-8"><MdSearch /><input className="input sm" placeholder="Search" value={q} onChange={(e) => { setQ(e.target.value); setOffset(0); }} aria-label="Search rows" /></div>
+			<div className="data-search mb-8"><MdSearch /><input className="input sm" placeholder="Search" value={q} onChange={(e) => { setQ(e.target.value); setOffset(0); }} aria-label="Search rows" /></div>
 			{isLoading ? <Loader /> : !data?.rows?.length ? <Empty text="No rows." /> : (
 				<div className="table-wrap" style={{ maxHeight: '60vh', overflow: 'auto' }}><table className="table">
 					<thead><tr>{data.columns.map((c: string) => <th key={c}>{c}</th>)}</tr></thead>
@@ -226,15 +202,19 @@ function RowsViewer({ u, onClose }: { u: any; onClose: () => void }) {
 	);
 }
 
-function AllData({ history }: { history: any[] }) {
+/** Every upload of the given kinds, newest first. */
+export function UploadHistory({ history, kinds, title, sub }: { history: any[]; kinds: string[]; title: string; sub?: string }) {
 	const [kind, setKind] = useState('');
 	const [view, setView] = useState<any>(null);
-	const rows = history.filter((h) => !kind || h.kind === kind);
+	const rows = history.filter((h) => kinds.includes(h.kind) && (!kind || h.kind === kind));
 	return (
-		<Card title="All data" sub="Every upload of every kind: stock, tracking, Kalyan customers, the book links and price lists. Select the table icon to browse an upload's rows." flush
-			actions={<select className="input sm" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind"><option value="">Every kind</option>{Object.entries(KIND).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>}>
-			{!rows.length ? <Empty text="No uploads yet." /> : <UploadsTable rows={rows} onView={setView} showKind />}
+		<Card title={title} sub={sub || 'Every upload and its original file. Replies, tables and dashboards use the latest one. Select the table icon to browse an upload\'s rows.'} flush
+			actions={kinds.length > 1 ? <select className="input sm" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind"><option value="">Every kind</option>{kinds.map((k) => <option key={k} value={k}>{KIND[k]}</option>)}</select> : undefined}>
+			{!rows.length ? <Empty text="No uploads yet." /> : <UploadsTable rows={rows} onView={setView} showKind={kinds.length > 1} />}
 			{view && <RowsViewer u={view} onClose={() => setView(null)} />}
 		</Card>
 	);
 }
+
+/** The upload list for the uploads screens. */
+export const useUploads = () => useQuery({ queryKey: ['uploads', 'all'], queryFn: () => api('/uploads'), refetchInterval: (q: any) => (q.state.data?.active?.some((a: any) => a.status !== 'review') ? 4000 : false) });

@@ -1,6 +1,6 @@
 import type { IconType } from 'react-icons';
 import {
-	MdAutoAwesome, MdDashboard, MdForum, MdInsights, MdAssessment, MdInbox, MdSettings, MdToday, MdGroups, MdHelpOutline, MdContacts, MdInventory2, MdStorage,
+	MdAutoAwesome, MdDashboard, MdForum, MdInsights, MdAssessment, MdInbox, MdSettings, MdToday, MdGroups, MdHelpOutline, MdContacts, MdInventory2, MdStorage, MdLocalShipping,
 } from 'react-icons/md';
 
 export interface MenuItem {
@@ -25,7 +25,8 @@ export const menu: { section: string; items: MenuItem[] }[] = [
 		section: 'Data',
 		items: [
 			{ id: 'customerdb', text: 'Customer database', path: '/kalyan-customers', icon: MdContacts, minRole: 'analyst' },
-			{ id: 'stock', text: 'Stock and tracking', path: '/stock-tracking', icon: MdInventory2, minRole: 'analyst' },
+			{ id: 'stock', text: 'Stock', path: '/stock', icon: MdInventory2, minRole: 'analyst' },
+			{ id: 'tracking', text: 'Tracking', path: '/tracking', icon: MdLocalShipping, minRole: 'analyst' },
 		],
 	},
 	{

@@ -48,9 +48,9 @@ export function Card({
 }
 
 export function Kpi({
-	label, value, icon, accent = COLORS.blue, delta, invert, foot, onClick,
+	label, value, icon, accent = COLORS.blue, delta, deltaUnit = '', invert, foot, onClick,
 }: {
-	label: string; value: ReactNode; icon?: ReactNode; accent?: string; delta?: number | null; invert?: boolean; foot?: ReactNode; onClick?: () => void;
+	label: string; value: ReactNode; icon?: ReactNode; accent?: string; delta?: number | null; deltaUnit?: string; invert?: boolean; foot?: ReactNode; onClick?: () => void;
 }) {
 	const good = delta === undefined || delta === null || delta === 0 ? null : invert ? delta < 0 : delta > 0;
 	return (
@@ -60,7 +60,7 @@ export function Kpi({
 			<div className="kpi-foot">
 				{delta !== undefined && delta !== null && delta !== 0 && (
 					<span className={good ? 'up-good' : 'up-bad'} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-						{delta > 0 ? <MdTrendingUp /> : <MdTrendingDown />} {delta > 0 ? '+' : ''}{delta}
+						{delta > 0 ? <MdTrendingUp /> : <MdTrendingDown />} {delta > 0 ? '+' : ''}{delta}{deltaUnit}
 					</span>
 				)}
 				{foot}

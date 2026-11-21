@@ -17,6 +17,9 @@ import { download, authFetch } from '../../lib/files';
 import Addresses from './Addresses';
 import { Books, Mappings } from './MasterData';
 import { BookPreview } from '../Uploads';
+import DataTable from '../../components/DataTable';
+import { ViewSwitch } from '../../components/dash';
+import { LinksDashboard, SuchiDashboard } from './BookListInsight';
 
 const SUBS = [
 	{ v: 'locations', l: 'Locations' }, { v: 'others', l: 'Others' }, { v: 'bank', l: 'Bank details' }, { v: 'discount', l: 'Discount details' }, { v: 'freight', l: 'Freight charges' },
@@ -38,14 +41,29 @@ export default function MasterHub() {
 			{sub === 'bank' && <Bank data={data} />}
 			{sub === 'discount' && <Discount data={data} />}
 			{sub === 'freight' && <Freight data={data} />}
-			{sub === 'suchi' && <Suchi />}
-			{sub === 'links' && <Links />}
+			{sub === 'suchi' && <BookSection kind="suchi" />}
+			{sub === 'links' && <BookSection kind="links" />}
 			{sub === 'books' && <Books />}
 			{data?.history?.length > 0 && ['bank', 'discount', 'freight', 'others'].includes(sub) && (
 				<details className="mt-16"><summary className="xs faint">Change history</summary>
 					<div className="xs">{data.history.map((h: any, i: number) => <div key={i}>{fmtDateTime(h.changed_at)} · {data.labels[h.key] || h.key} · {h.changed_by || 'system'}</div>)}</div>
 				</details>
 			)}
+		</>
+	);
+}
+
+/** The book list (Suchi) and the book links: a dashboard, all the data, and the upload with its history. */
+function BookSection({ kind }: { kind: 'suchi' | 'links' }) {
+	const [sp, setSp] = useSearchParams();
+	const view = sp.get('view') || 'dashboard';
+	const go = (v: string, f: Record<string, string> = {}) => setSp({ sub: kind, view: v, ...f }, { replace: v === view });
+	return (
+		<>
+			<div className="mb-16"><ViewSwitch value={view} onChange={(v) => go(v)} /></div>
+			{view === 'data' ? <DataTable name={kind} />
+				: view === 'upload' ? (kind === 'suchi' ? <Suchi /> : <Links />)
+					: kind === 'suchi' ? <SuchiDashboard toData={(f) => go('data', f)} /> : <LinksDashboard toData={(f) => go('data', f)} />}
 		</>
 	);
 }

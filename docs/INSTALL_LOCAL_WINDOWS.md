@@ -37,7 +37,7 @@ everything on this computer, and is opened at **http://localhost:8888**. About 2
    booksales@, manager@, retailsales@, mumbai@ and kalyan@gitapress.org.
 5. **Settings → System status → Delete everything and rebuild** (first run only): clears the old mail, customers and uploads,
    then reads 90 days of mail again.
-6. Upload the data: **Admin → Master data → Book list (Suchi)** and **Book links**, then **Stock and tracking** (orders,
+6. Upload the data: **Admin → Master data → Book list (Suchi)** and **Book links**, then **Stock** and **Tracking** (orders,
    branch stock, main stock, Kalyan tracking) and **Customer database** (all customers, current year).
 
 Already had the old version on this computer (`C:\Vikproj\Gita_email` with your own PostgreSQL)? Keep your `.env`

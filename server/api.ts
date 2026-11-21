@@ -41,6 +41,7 @@ import { getPurposeDefs } from './ai/purposeDefs';
 import { computeTiers, moveCustomerData, refreshStats } from './customers/link';
 import { registerStage1 } from './routes/stage1';
 import { registerRebuild } from './routes/rebuild';
+import { registerData } from './routes/data';
 import { printPage } from './print';
 import { runUploads } from './worker';
 import { writeXlsx } from './xlsx';
@@ -1497,6 +1498,7 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 // /api/purposes and the Stage 1 routes (uploads, master data, customers, reasons) live in server/routes/stage1.ts
 registerStage1(r, { kickUploads });
 registerRebuild(r, { kickWorker, kickUploads });
+registerData(r);
 
 
 // ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──

@@ -1,3 +1,4 @@
+import { pinStateSql } from './geo/pin';
 // Database migrations. Applied in order, tracked in schema_migrations.
 // Add new migrations to the end of the list; never edit an applied one.
 export const migrations: { id: string; sql: string }[] = [
@@ -1116,5 +1117,10 @@ alter table upload_batches drop constraint if exists upload_batches_status_check
 alter table upload_batches add constraint upload_batches_status_check check (status in ('receiving','review','queued','processing','done','failed','cancelled'));
 alter table upload_batches add column if not exists review jsonb not null default '{}';
 alter table upload_batches add column if not exists options jsonb not null default '{}';
+` },
+{ id: '015_pin_state_insight_indexes', sql: pinStateSql() + String.raw`
+create index if not exists kalyan_customer_years_cust_idx on kalyan_customer_years (org_id, custno, year);
+create index if not exists kalyan_dispatches_cust_idx on kalyan_dispatches (org_id, custno);
+create index if not exists book_titles_suchi_idx on book_titles (org_id) where in_suchi;
 ` },
 ];

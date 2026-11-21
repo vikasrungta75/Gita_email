@@ -297,10 +297,62 @@ const tabs = await call('GET', '/api/emails?tab=kalyan');
 assert.ok(tabs.data.rows.every((r: any) => r.primary_group === 'kalyan'));
 const oq = await call('GET', '/api/open-questions');
 assert.equal(oq.status, 200);
-const dash = await call('GET', '/api/kalyan/dashboard?year=2026');
-assert.equal(dash.status, 200);
+const dash = await call('GET', '/api/kalyan/insight?scope=current&year=2026');
+assert.equal(dash.status, 200, JSON.stringify(dash.data));
 assert.ok(dash.data.current.active >= 2);
 assert.ok(dash.data.current.new >= 2);
+
+// ── customer dashboard arithmetic: A 2091-93, B 2092, C 2093, D 2091 and 2093 ──
+for (const [c, st, ys] of [['T91A', 'Rajasthan', [2091, 2092, 2093]], ['T91B', 'Rajasthan', [2092]], ['T91C', 'Bihar', [2093]], ['T91D', 'Bihar', [2091, 2093]]] as const) {
+	await q('insert into kalyan_customers (org_id, custno, name, state, state_norm, sub_type, regdate) values ($1, $2, $2, $3, $3, $4, $5) on conflict do nothing', [orgId, c, st, '1Y', `${ys[0]}-04-01`]);
+	for (const y of ys) await q('insert into kalyan_customer_years (org_id, custno, year, sub_type, paid_on, state) values ($1, $2, $3, $4, $5, $6) on conflict do nothing', [orgId, c, y, '1Y', `${y}-04-02`, st]);
+}
+const flow = await call('GET', '/api/kalyan/insight?scope=current&year=2093');
+assert.equal(flow.status, 200);
+assert.deepEqual(
+	(({ active, new: n, renewed, came_back, lost, retention }) => ({ active, n, renewed, came_back, lost, retention }))(flow.data.current),
+	{ active: 3, n: 1, renewed: 1, came_back: 1, lost: 1, retention: 50 });
+const y92 = flow.data.years.find((r: any) => r.year === 2092);
+assert.equal(y92.active, 2); assert.equal(y92.new, 1); assert.equal(y92.lost, 1);
+assert.equal(flow.data.previous.year, 2092);
+const all = await call('GET', '/api/kalyan/insight?scope=all&year=2093');
+assert.ok(all.data.all.total >= 4);
+const geoRes = await call('GET', '/api/kalyan/geo?scope=current&year=2093');
+assert.equal(geoRes.status, 200);
+const raj = geoRes.data.states.find((s: any) => s.k === 'Rajasthan');
+const bih = geoRes.data.states.find((s: any) => s.k === 'Bihar');
+assert.equal(raj.active[2092], 2); assert.equal(raj.lost[2093], 1); assert.equal(bih.active[2093], 2); assert.equal(bih.new[2093], 1); assert.equal(bih.renewed[2093] || 0, 0);
+assert.ok(geoRes.data.years.includes(2093));
+const geoState = await call('GET', '/api/kalyan/geo?scope=all&year=2093&state=Bihar');
+assert.equal(geoState.data.state, 'Bihar');
+await q("delete from kalyan_customer_years where org_id = $1 and custno like 'T91%'", [orgId]);
+await q("delete from kalyan_customers where org_id = $1 and custno like 'T91%'", [orgId]);
+
+// ── full-data tables and dashboards ──
+const sets = await call('GET', '/api/datasets');
+assert.deepEqual(sets.data.map((d: any) => d.name).sort(), ['kalyan_dispatch', 'links', 'orders', 'stock_branch', 'stock_hq', 'suchi']);
+for (const d of sets.data) {
+	const r = await call('GET', `/api/datasets/${d.name}/rows?limit=5`);
+	assert.equal(r.status, 200, `${d.name}: ${JSON.stringify(r.data)}`);
+	const f = d.cols.find((c: any) => c.facet);
+	assert.equal((await call('GET', `/api/datasets/${d.name}/facet/${f.key}`)).status, 200, `${d.name} facet`);
+}
+const suchiData = await call('GET', '/api/datasets/suchi/rows?sort=price&dir=desc&limit=3');
+assert.ok(suchiData.data.total > 0);
+assert.ok(suchiData.data.rows[0].price >= suchiData.data.rows[suchiData.data.rows.length - 1].price, 'sorted by price, highest first');
+const filtered = await call('GET', `/api/datasets/suchi/rows?f.code=${encodeURIComponent(suchiData.data.rows[0].code)}`);
+assert.equal(filtered.data.total, 1);
+assert.equal((await call('GET', '/api/datasets/suchi/rows?sort=nosuchcolumn;drop')).status, 200, 'unknown sort falls back');
+assert.equal((await call('GET', '/api/datasets/nope/rows')).status, 404);
+assert.equal((await call('GET', '/api/datasets/suchi/facet/nope')).status, 400);
+const xl = await handle(new Request('http://x/api/datasets/suchi/rows?format=xlsx', { headers: { authorization: `Bearer ${token}` } }));
+assert.equal(xl.status, 200);
+assert.match(xl.headers.get('content-type') || '', /spreadsheet/);
+for (const path of ['/api/insight/stock?scope=hq', '/api/insight/stock?scope=branch', '/api/insight/orders', '/api/insight/orders?days=30', '/api/insight/kalyan-dispatch', '/api/insight/suchi', '/api/insight/links']) {
+	const r = await call('GET', path);
+	assert.equal(r.status, 200, `${path}: ${JSON.stringify(r.data)}`);
+}
+assert.equal((await one<any>("select pin_state('273005') as s")).s, 'Uttar Pradesh');
 const before = await call('GET', '/api/system/reset');
 assert.ok(before.data.delete.Emails > 0);
 assert.equal((await call('POST', '/api/system/reset', { confirm: 'NO' })).status, 400);
