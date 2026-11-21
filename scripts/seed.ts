@@ -1,3 +1,4 @@
+import '../server/loadEnv';
 /** Load the Wheel King demo dataset and analyse it: npm run seed */
 import { ensureSchema, getPool, q } from '../server/db';
 import { defaultOrgId } from '../server/auth';

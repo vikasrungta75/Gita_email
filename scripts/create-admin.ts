@@ -1,3 +1,4 @@
+import '../server/loadEnv';
 /** Usage: DATABASE_URL=... npm run create-admin -- you@company.com "Your Name" 'StrongPassword1' */
 import bcrypt from 'bcryptjs';
 import { ensureSchema, getPool, q } from '../server/db';

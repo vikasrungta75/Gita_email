@@ -1,8 +1,9 @@
+import '../server/loadEnv';
 import { ensureSchema, getPool } from '../server/db';
 import { defaultOrgId } from '../server/auth';
 
 if (!process.env.DATABASE_URL) {
-	console.warn('[migrate] No DATABASE_URL — skipping migrations (they will also run on first API request).');
+	console.warn('[migrate] No DATABASE_URL in .env or the environment — add it to .env and run again.');
 	process.exit(0);
 }
 try {
