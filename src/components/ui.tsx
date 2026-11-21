@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { MdClose, MdExpandMore, MdInbox, MdTrendingDown, MdTrendingUp } from 'react-icons/md';
 import { COLORS, stateLabel } from '../lib/format';
 
@@ -200,7 +201,8 @@ export function Modal({ title, onClose, children, footer, wide }: { title: React
 		window.addEventListener('keydown', h);
 		return () => window.removeEventListener('keydown', h);
 	}, [onClose]);
-	return (
+	// drawn at the top of the page, so nothing beside the opener (a sticky table header) can show through it
+	return createPortal(
 		<div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
 			<div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true">
 				<div className="modal-head">
@@ -210,7 +212,8 @@ export function Modal({ title, onClose, children, footer, wide }: { title: React
 				<div className="modal-body">{children}</div>
 				{footer && <div className="modal-foot">{footer}</div>}
 			</div>
-		</div>
+		</div>,
+		document.body,
 	);
 }
 

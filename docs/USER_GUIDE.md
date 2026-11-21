@@ -119,6 +119,13 @@ Book list (Suchi: the PDF or the Excel version; check summary first) · Book lin
 
 ## Settings
 
+* **Reply drafts and signature**: the signature in English and in Hindi (the draft uses the reader's language), the Gita
+  Press logo beside it, and the address, phone and email of the reader's branch (or the head office) with the website;
+  a preview shows a sent reply in each language. In any email, **Preview as sent** shows the reply exactly as the reader
+  will see it.
+* **AI** (admins): Gemini, Claude, rules only, or as in .env; the model for each (the basic one first: Gemini 3.5
+  Flash-Lite, Claude Haiku 5.5); the API keys, stored encrypted and never shown again; **Test the key and model**.
+  Changes apply at once, without a restart. Settings → AI takes priority over .env.
 * **Emails**: sync window (30/60/90 days) and interval; criticality and reply targets; the facts each group needs; which
   reason belongs to which group; the Kalyan year start; the Kalyan columns kept.
 * **Pending questions**: completeness by group, the weekly completeness trend, open questions by type, answer once for

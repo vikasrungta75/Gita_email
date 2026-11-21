@@ -1123,4 +1123,12 @@ create index if not exists kalyan_customer_years_cust_idx on kalyan_customer_yea
 create index if not exists kalyan_dispatches_cust_idx on kalyan_dispatches (org_id, custno);
 create index if not exists book_titles_suchi_idx on book_titles (org_id) where in_suchi;
 ` },
+{ id: '016_app_settings', sql: String.raw`
+-- settings for the whole installation (the AI provider and its keys, encrypted)
+create table if not exists app_settings (
+  key        text primary key,
+  value      jsonb not null default '{}',
+  updated_at timestamptz not null default now()
+);
+` },
 ];

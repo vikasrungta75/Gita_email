@@ -21,6 +21,10 @@ import { makeQuote, priceItems } from '../server/email/quote';
 import { forgetStock } from '../server/stock/stock';
 import { writeXlsx } from '../server/xlsx';
 import { handle } from '../server/api';
+import { composeOutgoing, splitBody, signatureSettings, DEFAULT_SIGNATURE_HI } from '../server/email/signature';
+import { HEAD_OFFICE } from '../server/branding';
+import { aiProvider, aiModel } from '../server/ai/llm';
+import { loadAiConfig } from '../server/ai/config';
 
 // ── pricing rules ──
 const F = DEFAULTS.freight, D = DEFAULTS.discount;
@@ -353,6 +357,78 @@ for (const path of ['/api/insight/stock?scope=hq', '/api/insight/stock?scope=bra
 	assert.equal(r.status, 200, `${path}: ${JSON.stringify(r.data)}`);
 }
 assert.equal((await one<any>("select pin_state('273005') as s")).s, 'Uttar Pradesh');
+
+// ── signature: the logo beside the signature lines, the closing line kept in the text ──
+{
+	const sigSet = signatureSettings({ replySignature: 'Regards,\nCustomer Service\nGita Press, Gorakhpur' });
+	const body = 'Dear Ram ji,\n\nYour order is on its way: https://www.indiapost.gov.in\n\nRegards,\nCustomer Service\nGita Press, Gorakhpur';
+	const out = composeOutgoing(body, sigSet, HEAD_OFFICE, 'Gita Press, Gorakhpur');
+	assert.match(out.html, /Regards,<table/, 'closing stays in the text, block follows');
+	assert.match(out.html, /<img src="cid:gitapress-logo"[^>]*>.*Customer Service/s, 'logo beside the signature lines');
+	assert.match(out.html, /P\.O\. Gita Press, Gorakhpur 273005/);
+	assert.match(out.html, /<a href="https:\/\/www\.indiapost\.gov\.in"/, 'links in the reply are clickable');
+	assert.equal((out.html.match(/Gita Press, Gorakhpur<\//g) || []).length, 1, 'the signature already names the head office, so it is not repeated');
+	assert.equal(out.inline.length, 1);
+	assert.ok(out.text.startsWith(body) && out.text.includes('273005'), 'plain text keeps the same words');
+	const noLogo = composeOutgoing(body, { ...sigSet, logo: false }, HEAD_OFFICE);
+	assert.ok(!noLogo.html.includes('cid:') && noLogo.inline.length === 0);
+	const bare = composeOutgoing(body, { ...sigSet, footer: false }, null);
+	assert.match(bare.html, /cid:gitapress-logo/); assert.ok(!bare.html.includes('273005'));
+	const edited = composeOutgoing('Dear Ram ji,\n\nThank you.\nShyam', sigSet, HEAD_OFFICE);
+	assert.match(edited.html, /Thank you\.<br>Shyam<div style="margin-top:18px/, 'signature edited out: logo and address go under the reply');
+	const hi = splitBody(`आदरणीय जी,\n\nधन्यवाद।\n\n${DEFAULT_SIGNATURE_HI}`, [sigSet.en, sigSet.hi]);
+	assert.equal(hi?.closing, 'सादर,'); assert.deepEqual(hi?.lines, ['ग्राहक सेवा', 'गीताप्रेस, गोरखपुर']);
+	const esc = composeOutgoing('Hi <b>x</b>\n\nRegards,\nA & B', { ...sigSet, en: 'Regards,\nA & B' }, null);
+	assert.ok(esc.html.includes('&lt;b&gt;') && esc.html.includes('A &amp; B'), 'text is escaped');
+}
+const sigPrev = await call('POST', '/api/settings/signature/preview', { replySignature: 'Regards,\nKalyan Office', replyLogo: true, hindi: false });
+assert.equal(sigPrev.status, 200);
+assert.match(sigPrev.data.html, /\/brand\/gitapress-logo\.png/); assert.match(sigPrev.data.html, /Kalyan Office/);
+const anyDraft = await one<any>('select id from reply_drafts where org_id=$1 order by id limit 1', [orgId]);
+if (anyDraft) {
+	const dp = await call('GET', `/api/drafts/${anyDraft.id}/preview`);
+	assert.equal(dp.status, 200); assert.match(dp.data.html, /gitapress-logo\.png/);
+}
+const patched = await call('PATCH', '/api/settings', { settings: { replySignatureHi: 'सादर,\nकल्याण कार्यालय', replyLogo: false } });
+assert.equal(patched.status, 200, JSON.stringify(patched.data));
+const os = (await getOrg(orgId, true)).settings as any;
+assert.equal(os.replySignatureHi, 'सादर,\nकल्याण कार्यालय'); assert.equal(os.replyLogo, false);
+await call('PATCH', '/api/settings', { settings: { replySignatureHi: '', replyLogo: true } });
+
+// ── Settings → AI: provider, model and encrypted keys; .env is the fallback ──
+{
+	const envBefore = { p: process.env.AI_PROVIDER, g: process.env.GEMINI_API_KEY, a: process.env.ANTHROPIC_API_KEY };
+	process.env.AI_PROVIDER = 'heuristic'; delete process.env.GEMINI_API_KEY; delete process.env.ANTHROPIC_API_KEY;
+	const fakeKey = 'AIzaTEST-not-a-real-key-1234567890abcd';
+	assert.equal((await call('PUT', '/api/settings/ai', { provider: 'gemini', geminiModel: 'bad model!' })).status, 400, 'model names are checked');
+	assert.equal((await call('PUT', '/api/settings/ai', { provider: 'gemini', geminiKey: 'short' })).status, 400, 'obviously wrong keys are refused');
+	const saved = await call('PUT', '/api/settings/ai', { provider: 'gemini', geminiModel: 'gemini-3.5-flash-lite', geminiKey: fakeKey });
+	assert.equal(saved.status, 200, JSON.stringify(saved.data));
+	assert.equal(saved.data.effective.provider, 'gemini'); assert.equal(saved.data.effective.model, 'gemini-3.5-flash-lite');
+	assert.ok(!JSON.stringify(saved.data).includes(fakeKey), 'the key is never sent back'); assert.equal(saved.data.keys.gemini.hint, '…abcd');
+	const raw = (await one<any>("select value::text as v from app_settings where key='ai'")).v;
+	assert.ok(!raw.includes(fakeKey), 'the key is stored encrypted');
+	assert.equal(aiProvider(), 'gemini'); assert.equal(aiModel(), 'gemini-3.5-flash-lite');
+	const audits = await one<any>("select count(*)::int n from audit_log where action='settings.ai' and details::text like $1", [`%${fakeKey}%`]).catch(() => ({ n: 0 }));
+	assert.equal(audits.n, 0, 'the key is not in the audit log');
+	// Claude chosen without a key: the rules engine is used, not a failing call
+	await call('PUT', '/api/settings/ai', { provider: 'anthropic', anthropicModel: 'claude-haiku-5-5' });
+	assert.equal(aiProvider(), 'heuristic');
+	const t = await call('POST', '/api/settings/ai/test', { provider: 'anthropic' });
+	assert.equal(t.data.ok, false); assert.match(t.data.message, /No API key/);
+	// remove the saved key and go back to .env
+	await call('PUT', '/api/settings/ai', { provider: 'env', geminiKey: null, geminiModel: '' });
+	const back = await call('GET', '/api/settings/ai');
+	assert.equal(back.data.keys.gemini.set, false); assert.equal(back.data.provider, 'env');
+	assert.equal(aiProvider(), 'heuristic');
+	process.env.GEMINI_API_KEY = 'AIzaENV-key-0000000000000000000000';
+	process.env.AI_PROVIDER = 'gemini';
+	await loadAiConfig(true);
+	assert.equal(aiProvider(), 'gemini', '.env still works when Settings says "as in .env"');
+	assert.equal((await call('GET', '/api/settings/ai')).data.keys.gemini.source, 'env');
+	for (const [k, v] of [['AI_PROVIDER', envBefore.p], ['GEMINI_API_KEY', envBefore.g], ['ANTHROPIC_API_KEY', envBefore.a]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+	await q("delete from app_settings where key='ai'"); await loadAiConfig(true);
+}
 const before = await call('GET', '/api/system/reset');
 assert.ok(before.data.delete.Emails > 0);
 assert.equal((await call('POST', '/api/system/reset', { confirm: 'NO' })).status, 400);

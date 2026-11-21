@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MdAttachFile, MdAutoAwesome, MdCancel, MdCheckCircle, MdEdit, MdOpenInNew, MdPictureAsPdf, MdRefresh, MdSchedule, MdSend, MdUndo } from 'react-icons/md';
+import { MdAttachFile, MdAutoAwesome, MdCancel, MdCheckCircle, MdEdit, MdOpenInNew, MdPictureAsPdf, MdRefresh, MdSchedule, MdSend, MdUndo, MdVisibility } from 'react-icons/md';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -60,6 +60,7 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 	const [edit, setEdit] = useState<string | null>(null);
 	const [rewrite, setRewrite] = useState<{ before: string; after: string } | null>(null);
 	const [later, setLater] = useState(false);
+	const [asSent, setAsSent] = useState(false);
 	const [laterAt, setLaterAt] = useState('');
 	const [showAll, setShowAll] = useState(false);
 	const editor = useRef<HTMLTextAreaElement>(null);
@@ -211,6 +212,7 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 									<button className="btn" disabled={!!missing} onClick={() => setLater(!later)}><MdSchedule /> Send later</button>
 									<button className="btn" disabled={doRewrite.isPending} onClick={() => doRewrite.mutate()}><MdAutoAwesome /> {doRewrite.isPending ? 'Rewriting…' : 'Rewrite properly'}</button>
 									<button className="btn ghost" onClick={() => setEdit(draft.body)}><MdEdit /> Edit text</button>
+									<button className="btn ghost" onClick={() => setAsSent(true)} title="The email as the reader will see it, with the signature and the Gita Press logo"><MdVisibility /> Preview as sent</button>
 									{missing > 0 && <span className="xs" style={{ color: 'var(--amber)' }}>{missing} yellow item{missing > 1 ? 's' : ''} left</span>}
 								</div>
 							)}
@@ -223,6 +225,7 @@ export default function EmailPane({ id, meta, onClose }: { id: number; meta: any
 						</div>
 					)}
 
+			{asSent && draft && <SentPreview draftId={draft.id} onClose={() => setAsSent(false)} />}
 			{rewrite && (
 				<Modal wide title="Rewrite properly: check before using" onClose={() => setRewrite(null)}
 					footer={<><button className="btn" onClick={() => setRewrite(null)}>Keep the current reply</button><button className="btn primary" disabled={accept.isPending} onClick={() => accept.mutate(rewrite.after)}>Use the rewritten reply</button></>}>
@@ -302,5 +305,16 @@ function QuoteBuilder({ bulk, international, stages, onDone }: { bulk: any; inte
 				{bulk.quote_no && <button className="btn ghost sm" onClick={() => download(`/bulk/${bulk.id}/quote.pdf`, `Gita-Press-Quote-${bulk.quote_no}.pdf`).catch((e) => toast(e.message, 'error'))}>Download</button>}
 			</div>}
 		</details>
+	);
+}
+
+/** The reply as the reader will see it: the HTML email with the signature block and the Gita Press logo. */
+function SentPreview({ draftId, onClose }: { draftId: number; onClose: () => void }) {
+	const { data, isLoading, error } = useQuery({ queryKey: ['draft-preview', draftId], queryFn: () => api(`/drafts/${draftId}/preview`), gcTime: 0 });
+	return (
+		<Modal wide title="Preview as sent" onClose={onClose}>
+			<div className="xs faint mb-8">Yellow items are shown as they are; answer them before sending.</div>
+			<div className="email-preview">{isLoading ? <Loader /> : error ? <div className="small" style={{ color: 'var(--red)' }}>{(error as any).message}</div> : <div dangerouslySetInnerHTML={{ __html: data.html }} />}</div>
+		</Modal>
 	);
 }

@@ -2581,3 +2581,8 @@ table.table td.wrap-cell { white-space: normal; min-width: 220px; max-width: 420
 input[type='range'] { accent-color: #2563EB; }
 
 .data-search { position: relative; flex: 0 1 300px; min-width: 220px; svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-3); z-index: 1; } input.input { width: 100%; padding-left: 30px; } }
+
+// ── signature preview and choices (Settings → AI, Reply drafts) ──
+.email-preview { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; max-height: 60vh; overflow: auto; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: #fff;
+	input { margin-top: 3px; } &.on { border-color: #6366F1; background: #EEF2FF; } }

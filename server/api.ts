@@ -42,6 +42,7 @@ import { computeTiers, moveCustomerData, refreshStats } from './customers/link';
 import { registerStage1 } from './routes/stage1';
 import { registerRebuild } from './routes/rebuild';
 import { registerData } from './routes/data';
+import { registerAi } from './routes/ai';
 import { printPage } from './print';
 import { runUploads } from './worker';
 import { writeXlsx } from './xlsx';
@@ -1206,6 +1207,8 @@ r.patch('/api/settings', async (ctx) => {
 		if (settings.replyKnowledge !== undefined) next.replyKnowledge = String(settings.replyKnowledge).slice(0, 6000);
 		if (settings.replySignature !== undefined) next.replySignature = String(settings.replySignature).slice(0, 600);
 		if (settings.replyFooter !== undefined) (next as any).replyFooter = !!settings.replyFooter;
+		if (settings.replySignatureHi !== undefined) next.replySignatureHi = String(settings.replySignatureHi).slice(0, 600);
+		if (settings.replyLogo !== undefined) next.replyLogo = !!settings.replyLogo;
 		if (Array.isArray(settings.branches)) (next as any).branches = settings.branches.slice(0, 60).map((b: any) => ({ city: String(b.city || '').slice(0, 60), state: String(b.state || '').slice(0, 60), address: String(b.address || '').trim().slice(0, 300), address_hi: String(b.address_hi || '').trim().slice(0, 300), phone: String(b.phone || '').trim().slice(0, 120), email: String(b.email || '').trim().slice(0, 120) })).filter((b: any) => b.city);
 		if (settings.defaultBackfillDays !== undefined) next.defaultBackfillDays = Math.max(7, Math.min(365, Number(settings.defaultBackfillDays) || 90));
 	}
@@ -1499,6 +1502,7 @@ r.get('/api/customers/:id/suggestions', async (ctx) => {
 registerStage1(r, { kickUploads });
 registerRebuild(r, { kickWorker, kickUploads });
 registerData(r);
+registerAi(r);
 
 
 // ── Addresses (Settings → Addresses): official Gita Press list, Hindi first, with corrections ──

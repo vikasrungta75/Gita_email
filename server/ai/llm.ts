@@ -5,19 +5,26 @@
  */
 import { q } from '../db';
 import { heuristicAnalyse } from './heuristic';
+import { aiConfig } from './config';
 import { normaliseSubcategory, taxonomyForPrompt } from './taxonomy';
 import { normalisePurposes, purposesForPrompt } from './purposes';
 import { ANALYSIS_SCHEMA, analysisSchema, BUSINESS_CATEGORIES, CATEGORIES, PROPOSAL_STAGES, type Analysis, type ThreadInput } from './types';
 
 export type Provider = 'gemini' | 'anthropic' | 'openai' | 'azure' | 'heuristic';
 
-const geminiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+// Settings → AI comes first (server/ai/config.ts); anything left empty there falls back to .env
+const geminiKey = () => aiConfig().geminiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const anthropicKey = () => aiConfig().anthropicKey || process.env.ANTHROPIC_API_KEY || '';
 
 export function aiProvider(): Provider {
+	const chosen = aiConfig().provider;
+	if (chosen === 'heuristic') return 'heuristic';
+	if (chosen === 'gemini') return geminiKey() ? 'gemini' : 'heuristic';
+	if (chosen === 'anthropic') return anthropicKey() ? 'anthropic' : 'heuristic';
 	const p = (process.env.AI_PROVIDER || '').toLowerCase();
 	if (p === 'heuristic') return 'heuristic';
 	if ((p === 'gemini' || !p) && geminiKey()) return 'gemini';
-	if ((p === 'anthropic' || !p) && process.env.ANTHROPIC_API_KEY) return 'anthropic';
+	if ((p === 'anthropic' || !p) && anthropicKey()) return 'anthropic';
 	if ((p === 'azure' || !p) && process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY) return 'azure';
 	if ((p === 'openai' || !p) && process.env.OPENAI_API_KEY) return 'openai';
 	return 'heuristic';
@@ -25,8 +32,8 @@ export function aiProvider(): Provider {
 
 export function aiModel(): string {
 	switch (aiProvider()) {
-		case 'gemini': return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-		case 'anthropic': return process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
+		case 'gemini': return aiConfig().geminiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+		case 'anthropic': return aiConfig().anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
 		case 'azure': return process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini';
 		case 'openai': return process.env.OPENAI_MODEL || 'gpt-4o-mini';
 		default: return 'remail-heuristic-v1';
@@ -91,7 +98,7 @@ async function logUsage(orgId: number | null, model: string, inTok: number, outT
  */
 export function anthropicHeaders(): Record<string, string> {
 	const h: Record<string, string> = {
-		'x-api-key': process.env.ANTHROPIC_API_KEY!,
+		'x-api-key': anthropicKey(),
 		'anthropic-version': '2023-06-01',
 		'content-type': 'application/json',
 	};
@@ -151,7 +158,7 @@ async function anthropicCall(body: any) {
 		if (!res.ok) {
 			const msg = data?.error?.message || 'error';
 			// a wrong or revoked key fails every call: pause and say so, instead of failing thousands of threads one by one
-			if (res.status === 401 || res.status === 403) throw new QuotaError(`Claude rejected the API key (${res.status}: ${msg}). Check ANTHROPIC_API_KEY in .env, then restart Gita Mail.`, 900);
+			if (res.status === 401 || res.status === 403) throw new QuotaError(`Claude rejected the API key (${res.status}: ${msg}). Check the Claude key in Settings → AI.`, 900);
 			// out of credit or spend limit reached: pause instead of failing every thread
 			if (res.status === 400 && /credit balance|spend limit|billing/i.test(msg)) throw new QuotaError(`Claude: ${msg}`, 3600);
 			throw new Error(`Claude ${res.status}: ${msg}`);
@@ -180,6 +187,11 @@ async function aiPausedUntil(): Promise<number> {
 	return pauseCache.until;
 }
 export const aiPaused = async () => (await aiPausedUntil()) > Date.now();
+/** After the provider, model or key changes in Settings: try again at once instead of waiting out a pause. */
+export async function clearAiPause() {
+	await q('update ai_state set paused_until=null, last_error=null where id=1').catch(() => {});
+	pauseCache = { until: 0, at: 0 };
+}
 async function recordAiError(e: any) {
 	let until: Date | null = null;
 	if (e instanceof QuotaError) {
@@ -203,6 +215,9 @@ async function pace() {
 	lastAiCall = Date.now();
 }
 
+/** Gemini 1.x and 2.x still take a temperature; Gemini 3 and later do not. */
+export const geminiLegacy = (model: string) => /^(models\/)?gemini-[12](\.|-)/.test(model);
+
 async function geminiCall(opts: { system: string; prompt: string; schema?: object; maxTokens?: number }) {
 	await pace();
 	const model = aiModel();
@@ -211,7 +226,8 @@ async function geminiCall(opts: { system: string; prompt: string; schema?: objec
 		systemInstruction: { parts: [{ text: opts.system }] },
 		contents: [{ role: 'user', parts: [{ text: opts.prompt }] }],
 		generationConfig: {
-			temperature: 0.1,
+			// Gemini 3 and later reject sampling settings (temperature, top_p, top_k); older models accept them
+			...(geminiLegacy(model) ? { temperature: 0.1 } : {}),
 			maxOutputTokens: opts.maxTokens || 4096,
 			...(opts.schema ? { responseMimeType: 'application/json' } : {}),
 		},
@@ -247,7 +263,7 @@ async function geminiCall(opts: { system: string; prompt: string; schema?: objec
 	};
 	let { res, data } = await attempt(true);
 	if (!res.ok && res.status === 400 && opts.schema) ({ res, data } = await attempt(false));
-	if (res.status === 401 || res.status === 403) throw new QuotaError(`Gemini rejected the API key (${res.status}: ${data?.error?.message || 'error'}). Check GEMINI_API_KEY in .env, then restart Gita Mail.`, 900);
+	if (res.status === 401 || res.status === 403) throw new QuotaError(`Gemini rejected the API key (${res.status}: ${data?.error?.message || 'error'}). Check the Gemini key in Settings → AI.`, 900);
 	if (!res.ok) throw new Error(`Gemini ${res.status}: ${data?.error?.message || 'error'}`);
 	const cand = data.candidates?.[0];
 	const text = (cand?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('');
