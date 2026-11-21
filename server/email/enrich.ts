@@ -12,6 +12,7 @@
  * Free: database lookups and rules only. A person's edits to a draft are never overwritten.
  */
 import { one, q } from '../db';
+import { signatureSettings } from './signature';
 import { getOrg } from '../settings';
 import { upsertDraft } from '../drafts';
 import { stockContext, currentStock } from '../stock/stock';
@@ -242,7 +243,8 @@ export async function buildReply(c: Ctx): Promise<Built> {
 	const H = c.hindi;
 	const L = (en: string, hi: string) => (H ? hi : en);
 	const needed = factsFor(c.cfg, c.group, c.subTags);
-	const sig = ((await getOrg(c.orgId)).settings.replySignature || '').trim() || L('Regards,\nGita Press, Gorakhpur', 'सादर,\nगीताप्रेस, गोरखपुर');
+	const sigs = signatureSettings((await getOrg(c.orgId)).settings as any);
+	const sig = H ? sigs.hi : sigs.en;
 	const first = greetingName(c.sender.name || '');
 	const greeting = H ? `आदरणीय ${first ? `${first} जी` : 'महोदय/महोदया'},` : `Dear ${first || 'Sir/Madam'},`;
 	const subLabel = (k: string) => (H ? ({ '1Y': 'एक वर्ष', FY: 'पाँच वर्ष', LM: 'आजीवन सदस्य' } as Record<string, string>)[k] : null) || m.subperiod[k] || k;

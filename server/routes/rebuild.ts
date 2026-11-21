@@ -217,7 +217,7 @@ export function registerRebuild(r: Router, deps: { kickWorker: (mailboxId?: numb
 		const d = await getDraftForConversation(id, ctx.user!.orgId);
 		if (!d) throw new HttpError(404, 'There is no reply draft for this email');
 		const { askLLM, aiPaused, aiProvider } = await import('../ai/llm');
-		if (aiProvider() === 'heuristic') throw new HttpError(400, 'Rewriting needs an AI key (ANTHROPIC_API_KEY or GEMINI_API_KEY in .env). Without it, edit the text directly.');
+		if (aiProvider() === 'heuristic') throw new HttpError(400, 'Rewriting needs AI: choose Claude or Gemini and add its key in Settings → AI. Without it, edit the text directly.');
 		if (await aiPaused()) throw new HttpError(503, 'The AI is paused (quota). Try again later or edit the text directly.');
 		const last = await one<any>(`select from_name, body_clean, body_text from emails where conversation_id=$1 and direction='inbound' order by sent_at desc limit 1`, [id]);
 		const before = stripOk(d.body);

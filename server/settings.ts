@@ -12,6 +12,10 @@ export interface OrgSettings {
 	/** Facts the AI may use in replies: dispatch times, prices, policies, contacts */
 	replyKnowledge: string;
 	replySignature: string;
+	/** the signature for replies written in Hindi */
+	replySignatureHi?: string;
+	/** show the Gita Press logo beside the signature (default yes) */
+	replyLogo?: boolean;
 	/** Days of history read when a mailbox is first connected */
 	defaultBackfillDays: number;
 }

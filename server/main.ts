@@ -39,6 +39,10 @@ const { syncIntervalMinutes } = await import('./email/config');
 // 2. Database: create or upgrade tables on start
 try {
 	await ensureSchema();
+	// the AI provider chosen in Settings → AI (falls back to .env); reloaded every minute
+	const { loadAiConfig } = await import('./ai/config');
+	await loadAiConfig(true).catch((e) => console.error('[server] could not read the AI settings:', e.message));
+	setInterval(() => { loadAiConfig().catch(() => {}); }, 60_000).unref();
 	console.log('[server] database ready');
 } catch (e: any) {
 	console.error(`[server] database not reachable: ${e.message}`);

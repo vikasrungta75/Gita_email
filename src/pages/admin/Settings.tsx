@@ -12,6 +12,7 @@ import Mailboxes from './Mailboxes';
 import Users from './Users';
 import Processing from './Processing';
 import Audit from './Audit';
+import AiSettings from './AiSettings';
 import { COLORS, ago } from '../../lib/format';
 
 const Status = ({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) => (
@@ -69,7 +70,8 @@ function ReanalyseCard() {
 type Role = 'viewer' | 'analyst' | 'manager' | 'admin';
 const TABS: { v: string; l: string; min: Role }[] = [
 	{ v: 'general', l: 'General', min: 'manager' },
-	{ v: 'replies', l: 'Reply drafts', min: 'manager' },
+	{ v: 'replies', l: 'Reply drafts and signature', min: 'manager' },
+	{ v: 'ai', l: 'AI', min: 'admin' },
 	{ v: 'emails', l: 'Emails', min: 'analyst' },
 	{ v: 'questions', l: 'Pending questions', min: 'analyst' },
 	{ v: 'reasons', l: 'Reasons for contacting', min: 'manager' },
@@ -107,6 +109,7 @@ export default function Settings() {
 			<div className="settings-tab">
 				{tab === 'general' && <OrgSettings part="general" />}
 				{tab === 'replies' && <OrgSettings part="replies" />}
+				{tab === 'ai' && <AiSettings />}
 				{tab === 'emails' && <EmailRules />}
 				{tab === 'questions' && <PendingQuestions />}
 				{tab === 'autosend' && <AutoSend />}
@@ -135,7 +138,7 @@ function useOrgForm() {
 			body: {
 				name: form.name,
 				internalDomains: form.internalDomains.split(',').map((d: string) => d.trim()).filter(Boolean),
-				settings: { slaHours: form.slaHours, piiRedaction: form.piiRedaction, retentionDays: form.retentionDays, analysisWindowDays: form.analysisWindowDays, ignoreAutomated: form.ignoreAutomated, autoDrafts: form.autoDrafts, replyKnowledge: form.replyKnowledge, replySignature: form.replySignature, defaultBackfillDays: form.defaultBackfillDays, replyFooter: form.replyFooter },
+				settings: { slaHours: form.slaHours, piiRedaction: form.piiRedaction, retentionDays: form.retentionDays, analysisWindowDays: form.analysisWindowDays, ignoreAutomated: form.ignoreAutomated, autoDrafts: form.autoDrafts, replyKnowledge: form.replyKnowledge, replySignature: form.replySignature, replySignatureHi: form.replySignatureHi, replyLogo: form.replyLogo, defaultBackfillDays: form.defaultBackfillDays, replyFooter: form.replyFooter },
 			},
 		}),
 		onSuccess: () => { qc.invalidateQueries(); toast('Settings saved'); setDirty(false); },
@@ -213,18 +216,49 @@ function OrgSettings({ part }: { part: 'general' | 'replies' }) {
 							placeholder={'Facts the AI may use instead of leaving a yellow placeholder, for example:\nVPP orders are dispatched within 3 to 5 working days.\nKalyan annual subscription: Rs 300, starts from the January issue.'} />
 						<span className="hint">Stock and prices come from the Tally uploads (Inventory) and addresses from the Addresses tab, so they need not be typed here. Default replies and FAQs are in <a href="/help#templates">Help and templates</a>.</span></div>
 					<div className="grid g-2">
-						<div className="field"><label>Signature</label><textarea className="input" rows={3} disabled={!admin} value={form.replySignature || ''} onChange={(e) => set({ replySignature: e.target.value })} /></div>
 						<div className="field"><label>History read when a mailbox is first connected (days)</label>
 							<select className="input" disabled={!admin} value={form.defaultBackfillDays || 90} onChange={(e) => set({ defaultBackfillDays: Number(e.target.value) })}>
 								<option value={30}>30 days</option><option value={90}>90 days (recommended)</option><option value={180}>180 days</option><option value={365}>365 days</option>
 							</select></div>
 					</div>
-					<Switch checked={form.replyFooter !== false} onChange={(v) => admin && set({ replyFooter: v })} label="Add the Gita Press logo, website link and the address of the reader's branch (English and Hindi) under every reply" />
-					<span className="hint">The addresses are edited in the <a href="/admin/settings?tab=addresses">Addresses</a> tab.</span>
 				</div>
 			</Card>
+			<SignatureCard form={form} set={set} admin={admin} />
 			{admin && <ReanalyseCard />}
 		</div>,
+	);
+}
+
+const DEFAULT_SIG = 'Regards,\nCustomer Service\nGita Press, Gorakhpur';
+const DEFAULT_SIG_HI = 'सादर,\nग्राहक सेवा\nगीताप्रेस, गोरखपुर';
+
+/** The signature in English and Hindi, the logo and the branch details, with a preview of a reply as it is sent. */
+function SignatureCard({ form, set, admin }: { form: any; set: (p: any) => void; admin: boolean }) {
+	const [hindi, setHindi] = useState(false);
+	const body = { replySignature: form.replySignature || DEFAULT_SIG, replySignatureHi: form.replySignatureHi || DEFAULT_SIG_HI, replyLogo: form.replyLogo !== false, replyFooter: form.replyFooter !== false, hindi };
+	const [debounced, setDebounced] = useState(body);
+	const key = JSON.stringify(body);
+	useEffect(() => { const t = setTimeout(() => setDebounced(JSON.parse(key)), 300); return () => clearTimeout(t); }, [key]);
+	const preview = useQuery({ queryKey: ['signature-preview', debounced], queryFn: () => api('/settings/signature/preview', { body: debounced }), placeholderData: (p: any) => p });
+	return (
+		<Card title={<h2><span className="kw">Signature</span></h2>} accent={COLORS.teal}
+			sub="Added at the end of every drafted reply: the English one for replies in English, the Hindi one for replies in Hindi. In the sent email the Gita Press logo sits beside it. Save the settings to apply it to new drafts; drafts already written keep their text.">
+			<div className="grid g-2">
+				<div className="col gap-12">
+					<div className="field"><label>Signature (English)</label><textarea className="input" rows={4} disabled={!admin} value={form.replySignature ?? DEFAULT_SIG} onChange={(e) => set({ replySignature: e.target.value })} /></div>
+					<div className="field"><label>Signature (Hindi)</label><textarea className="input" rows={4} disabled={!admin} value={form.replySignatureHi ?? DEFAULT_SIG_HI} onChange={(e) => set({ replySignatureHi: e.target.value })} /></div>
+					<span className="xs faint">Start with the closing line (Regards, / सादर,); it stays in the text and the lines after it go beside the logo.</span>
+					<Switch checked={form.replyLogo !== false} onChange={(v) => admin && set({ replyLogo: v })} label="Show the Gita Press logo beside the signature" />
+					<Switch checked={form.replyFooter !== false} onChange={(v) => admin && set({ replyFooter: v })} label="Add the address, phone and email of the reader's branch (or the head office) and the website" />
+					<span className="xs faint">Branch addresses are in <a href="/admin/master?sub=locations">Master data → Locations</a>.</span>
+				</div>
+				<div className="col gap-8">
+					<div className="row-between"><b className="small">Preview of a sent reply</b><Segmented value={hindi ? 'hi' : 'en'} options={[{ v: 'en', l: 'English' }, { v: 'hi', l: 'हिन्दी' }]} onChange={(v) => setHindi(v === 'hi')} /></div>
+					<div className="email-preview">{preview.data ? <div dangerouslySetInnerHTML={{ __html: preview.data.html }} /> : <Loader small />}</div>
+					<span className="xs faint">The head office is shown here; each reply uses the branch in the reader's city when there is one.</span>
+				</div>
+			</div>
+		</Card>
 	);
 }
 

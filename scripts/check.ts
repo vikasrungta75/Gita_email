@@ -55,6 +55,10 @@ async function checkDb() {
 		const c = await tryConnect(url);
 		const ver = (await c.query('show server_version')).rows[0].server_version;
 		const tables = (await c.query("select count(*)::int n from information_schema.tables where table_schema='public'")).rows[0].n;
+		// the AI chosen in Settings → AI takes priority over .env
+		const ai = await c.query("select value from app_settings where key='ai'").catch(() => null);
+		const chosen = ai?.rows[0]?.value;
+		if (chosen?.provider && chosen.provider !== 'env') aiFromSettings = { provider: chosen.provider, model: chosen.provider === 'gemini' ? chosen.geminiModel : chosen.anthropicModel, key: !!(chosen.provider === 'gemini' ? chosen.geminiKey : chosen.anthropicKey) };
 		await c.end();
 		ok('PostgreSQL', `connected to "${dbName}" (PostgreSQL ${ver}); ${tables ? tables + ' tables already there' : 'empty, tables are created on first start'}`);
 	} catch (e: any) {
@@ -74,10 +78,20 @@ async function checkDb() {
 	}
 }
 
-// Claude
+let aiFromSettings: { provider: string; model?: string; key: boolean } | null = null;
+
+// Claude or Gemini
 async function checkAi() {
+	if (aiFromSettings) {
+		const a = aiFromSettings;
+		const name = a.provider === 'gemini' ? 'Gemini' : a.provider === 'anthropic' ? 'Claude' : 'rules only';
+		if (a.provider === 'heuristic') return ok('AI', 'Settings → AI: rules only (no AI); .env is not used for AI');
+		if (a.key) return ok('AI', `Settings → AI: ${name}${a.model ? ` · ${a.model}` : ''}, key saved there (use "Test the key and model" on that page). .env is not used for AI`);
+		const envKey = a.provider === 'gemini' ? v('GEMINI_API_KEY') || v('GOOGLE_API_KEY') : v('ANTHROPIC_API_KEY');
+		if (!envKey) return fail('AI', `Settings → AI chooses ${name} but there is no key, in Settings or in .env: add it in Settings → AI`);
+	}
 	const provider = v('AI_PROVIDER') || (v('ANTHROPIC_API_KEY') ? 'anthropic' : v('GEMINI_API_KEY') ? 'gemini' : 'heuristic');
-	if (provider === 'heuristic') return warn('AI', 'no AI key: the basic rules engine is used. Add ANTHROPIC_API_KEY for good summaries and drafts');
+	if (provider === 'heuristic') return warn('AI', 'no AI key: the basic rules engine is used. Choose Claude or Gemini and add its key in Settings → AI (or in .env)');
 	if (provider === 'anthropic') {
 		if (!v('ANTHROPIC_API_KEY')) return fail('ANTHROPIC_API_KEY', 'AI_PROVIDER is anthropic but the key is missing');
 		try {
