@@ -106,7 +106,8 @@ export async function reviewKalyanCustomers(orgId: number, batch: any) {
 		        count(distinct s.data->>'_custno') filter (where k.custno is null)::int as new_to_master,
 		        count(*) filter (where s.data->>'_custno' = '')::int as no_number
 		   from kalyan_customer_stage s left join kalyan_customers k on k.org_id=$2 and k.custno = s.data->>'_custno' where s.batch_id=$1`, [batch.id, orgId]);
-	const out: any = { rows: n, customers: keyed.customers, newToMaster: keyed.new_to_master, alreadyKnown: keyed.customers - keyed.new_to_master, rejected: batch.rows_rejected };
+	const out: any = { rows: n, customers: keyed.customers, newToMaster: keyed.new_to_master, alreadyKnown: keyed.customers - keyed.new_to_master, rejected: batch.rows_rejected,
+		repeated: Math.max(0, n - keyed.no_number - keyed.customers) };
 	if (batch.kind === 'kalyan_current') {
 		const d = await one<any>(`select min((data->>'_paid')::date)::text as first, max((data->>'_paid')::date)::text as last, count(*) filter (where data->>'_paid' is null)::int as no_date from kalyan_customer_stage where batch_id=$1`, [batch.id]);
 		const cfg = await emailConfig(orgId);
@@ -120,12 +121,25 @@ export async function reviewKalyanCustomers(orgId: number, batch: any) {
 	return out;
 }
 
+/**
+ * A file can list the same customer number more than once (re-entered or renewed rows). One row per customer is kept:
+ * in the current-year file the one with the latest payment date, otherwise the last row in the file.
+ */
+export function oneRowPerCustomer(recs: any[], byPayment: boolean): any[] {
+	const pick = new Map<string, any>();
+	for (const d of recs) {
+		const prev = pick.get(d._custno);
+		if (!prev || !byPayment || String(d._paid || '') >= String(prev._paid || '')) pick.set(d._custno, d);
+	}
+	return [...pick.values()];
+}
+
 /** Applies a reviewed Kalyan customer upload (additive). */
 export async function applyKalyanCustomers(orgId: number, batch: any): Promise<{ added: number; updated: number; years?: number; netNewToMaster?: number }> {
 	const m = await getMappings(orgId);
 	const cfg = await emailConfig(orgId);
 	const rows = await q<any>('select data from kalyan_customer_stage where batch_id=$1 order by rowno', [batch.id]);
-	const recs = rows.map((r) => r.data).filter((d) => d._custno);
+	const recs = oneRowPerCustomer(rows.map((r) => r.data).filter((d) => d._custno), batch.kind === 'kalyan_current');
 	let added = 0, updated = 0, years = 0, netNew = 0;
 	await tx(async (c) => {
 		if (batch.kind === 'kalyan_master') {

@@ -103,6 +103,7 @@ export function BatchReview({ b }: { b: any }) {
 				{r.new !== undefined && <div><b>{num(r.new)}</b> new</div>}
 				{r.newToMaster !== undefined && <div><b>{num(r.newToMaster)}</b> new to the master database</div>}
 				{r.alreadyKnown !== undefined && <div><b>{num(r.alreadyKnown)}</b> already known (updated)</div>}
+				{r.repeated > 0 && <div className="warn"><b>{num(r.repeated)}</b> rows repeat a customer number already in the file: one row per customer is kept (current year: the latest payment)</div>}
 				{(r.rejected || x.rows_rejected) > 0 && <div style={{ color: 'var(--amber)' }}><b>{num(r.rejected || x.rows_rejected)}</b> rows cannot be used</div>}
 				{r.dates?.first && <div>Dates {fmtDate(r.dates.first)} to {fmtDate(r.dates.last)}</div>}
 				{r.payments?.first && <div>Payments {fmtDate(r.payments.first)} to {fmtDate(r.payments.last)}</div>}
