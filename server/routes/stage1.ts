@@ -77,7 +77,7 @@ export function registerStage1(r: Router, deps: { kickUploads: () => Promise<voi
 	});
 	r.get('/api/uploads/:id', async (ctx) => {
 		requireRole(ctx.user, 'analyst');
-		const b = await one<any>('select id, kind, file_name, status, step, rows_received, rows_total, rows_new, rows_updated, rows_unchanged, rows_rejected, profile, warnings, error, timing, uploaded_at, finished_at from upload_batches where id=$1 and org_id=$2', [Number(ctx.params.id), ctx.user!.orgId]);
+		const b = await one<any>('select id, kind, file_name, status, step, rows_received, rows_total, rows_new, rows_updated, rows_unchanged, rows_rejected, profile, warnings, error, timing, review, options, uploaded_at, finished_at from upload_batches where id=$1 and org_id=$2', [Number(ctx.params.id), ctx.user!.orgId]);
 		if (!b) throw new HttpError(404, 'Upload not found');
 		const run = b.status === 'done' ? await one<any>(`select status, steps, error, finished_at from analytics_runs where org_id=$1 and trigger like $2 order by id desc limit 1`, [ctx.user!.orgId, `upload:${b.kind}:${b.id}`]) : null;
 		return { ...b, analytics: run };

@@ -6,7 +6,7 @@ import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { Card, Loader, Modal, PageHead, Segmented, Switch } from '../../components/ui';
-import MasterData from './MasterData';
+import { EmailRules, PendingQuestions, AutoSend, ResetCard } from './EmailSettings';
 import Reasons from './Reasons';
 import Mailboxes from './Mailboxes';
 import Users from './Users';
@@ -70,8 +70,10 @@ type Role = 'viewer' | 'analyst' | 'manager' | 'admin';
 const TABS: { v: string; l: string; min: Role }[] = [
 	{ v: 'general', l: 'General', min: 'manager' },
 	{ v: 'replies', l: 'Reply drafts', min: 'manager' },
-	{ v: 'master', l: 'Master data', min: 'analyst' },
+	{ v: 'emails', l: 'Emails', min: 'analyst' },
+	{ v: 'questions', l: 'Pending questions', min: 'analyst' },
 	{ v: 'reasons', l: 'Reasons for contacting', min: 'manager' },
+	{ v: 'autosend', l: 'Auto-send', min: 'analyst' },
 	{ v: 'mailboxes', l: 'Mailboxes', min: 'analyst' },
 	{ v: 'users', l: 'Users and access', min: 'manager' },
 	{ v: 'status', l: 'System status', min: 'analyst' },
@@ -92,23 +94,26 @@ export default function Settings() {
 	const { can } = useAuth();
 	const [sp, setSp] = useSearchParams();
 	const tabs = TABS.filter((t) => can(t.min));
-	// the old Addresses tab now lives in Master data
-	const asked = sp.get('tab') === 'addresses' ? 'master' : sp.get('tab');
+	// master data has its own page now (Admin → Master data)
+	if (['master', 'addresses'].includes(sp.get('tab') || '')) return <Navigate to={`/admin/master?sub=${sp.get('tab') === 'addresses' ? 'locations' : sp.get('sub') || 'books'}`} replace />;
+	const asked = sp.get('tab');
 	const tab = tabs.find((t) => t.v === asked)?.v || tabs[0]?.v;
 	return (
 		<>
-			<PageHead kw="Settings" sub="Organisation, reply drafts, master data (books, addresses, catalogues, names and codes, festivals, customer tiers), reasons for contacting, mailboxes, users, system status and the audit log." />
+			<PageHead kw="Settings" sub="Organisation, reply drafts, email rules and completeness, pending questions, reasons for contacting, auto-send, mailboxes, users, system status and the audit log. Master data has its own page under Admin." />
 			<div className="mb-16" style={{ overflowX: 'auto' }}>
 				<Segmented value={tab} options={tabs.map(({ v, l }) => ({ v, l }))} onChange={(v) => setSp({ tab: v }, { replace: true })} />
 			</div>
 			<div className="settings-tab">
 				{tab === 'general' && <OrgSettings part="general" />}
 				{tab === 'replies' && <OrgSettings part="replies" />}
-				{tab === 'master' && <MasterData />}
+				{tab === 'emails' && <EmailRules />}
+				{tab === 'questions' && <PendingQuestions />}
+				{tab === 'autosend' && <AutoSend />}
 				{tab === 'reasons' && <Reasons />}
 				{tab === 'mailboxes' && <Mailboxes />}
 				{tab === 'users' && <Users />}
-				{tab === 'status' && <><AnalyticsSchedule /><SystemStatus /><Processing /></>}
+				{tab === 'status' && <><SystemStatus /><Processing />{can('admin') && <ResetCard />}</>}
 				{tab === 'audit' && <Audit />}
 			</div>
 		</>

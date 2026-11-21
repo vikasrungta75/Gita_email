@@ -1,7 +1,6 @@
 import type { IconType } from 'react-icons';
 import {
-	MdAutoAwesome, MdDashboard, MdNotificationsActive, MdBusiness, MdForum, MdChecklist,
-	MdInsights, MdAssessment, MdInbox, MdGroup, MdSettings, MdHistory, MdToday, MdDrafts, MdRequestQuote,MdGroups, MdHelpOutline, MdSync, MdContacts, MdInventory2, MdUploadFile,
+	MdAutoAwesome, MdDashboard, MdForum, MdInsights, MdAssessment, MdInbox, MdSettings, MdToday, MdGroups, MdHelpOutline, MdContacts, MdInventory2, MdStorage,
 } from 'react-icons/md';
 
 export interface MenuItem {
@@ -10,29 +9,30 @@ export interface MenuItem {
 	path: string;
 	icon: IconType;
 	minRole?: 'viewer' | 'analyst' | 'manager' | 'admin';
-	badge?: 'alerts' | 'critical' | 'myday' | 'drafts';
+	badge?: 'emails' | 'myday';
 	/** other paths that highlight this item */
 	also?: string[];
 }
 
 export const menu: { section: string; items: MenuItem[] }[] = [
 	{
-		section: 'My work',
+		section: 'Work',
 		items: [
-			{ id: 'myday', text: 'My day', path: '/my-day', icon: MdToday, badge: 'myday' },
-			{ id: 'drafts', text: 'Replies to send', path: '/replies', icon: MdDrafts, badge: 'drafts' },
-			{ id: 'sage', text: 'Mail Sage', path: '/mail-sage', icon: MdAutoAwesome },
+			{ id: 'emails', text: 'Emails', path: '/emails', icon: MdInbox, badge: 'emails' },
+		],
+	},
+	{
+		section: 'Data',
+		items: [
+			{ id: 'customerdb', text: 'Customer database', path: '/kalyan-customers', icon: MdContacts, minRole: 'analyst' },
+			{ id: 'stock', text: 'Stock and tracking', path: '/stock-tracking', icon: MdInventory2, minRole: 'analyst' },
 		],
 	},
 	{
 		section: 'Management',
 		items: [
 			{ id: 'overview', text: 'Overview', path: '/overview', icon: MdDashboard },
-			{ id: 'email', text: 'Email', path: '/all-email', also: ['/critical', '/conversations', '/category-report'], icon: MdForum, badge: 'critical' },
-			{ id: 'customers', text: 'Readers and customers', path: '/customers', icon: MdBusiness },
-			{ id: 'proposals', text: 'Bulk orders and quotes', path: '/proposals', icon: MdRequestQuote },
-			{ id: 'actions', text: 'Actions and commitments', path: '/actions', icon: MdChecklist },
-			{ id: 'alerts', text: 'Alerts', path: '/alerts', icon: MdNotificationsActive, badge: 'alerts' },
+			{ id: 'email', text: 'All email', path: '/all-email', also: ['/critical', '/conversations', '/category-report'], icon: MdForum },
 		],
 	},
 	{
@@ -44,18 +44,18 @@ export const menu: { section: string; items: MenuItem[] }[] = [
 		],
 	},
 	{
-		section: 'Inventory',
+		section: 'Admin',
 		items: [
-			{ id: 'inventory', text: 'Stock and sales', path: '/inventory', icon: MdInventory2, minRole: 'analyst' },
-			{ id: 'uploads', text: 'Uploads', path: '/uploads', icon: MdUploadFile, minRole: 'analyst' },
+			{ id: 'master', text: 'Master data', path: '/admin/master', icon: MdStorage, minRole: 'analyst' },
+			{ id: 'settings', text: 'Settings', path: '/admin/settings', icon: MdSettings, minRole: 'analyst', also: ['/admin/mailboxes', '/admin/users', '/admin/processing', '/admin/audit', '/admin/addresses'] },
+			{ id: 'help', text: 'Help and templates', path: '/help', icon: MdHelpOutline },
 		],
 	},
 	{
-		section: 'Admin',
+		section: 'To decide',
 		items: [
-			{ id: 'customerdb', text: 'Customer database', path: '/admin/customers', icon: MdContacts, minRole: 'analyst' },
-			{ id: 'settings', text: 'Settings', path: '/admin/settings', icon: MdSettings, minRole: 'analyst', also: ['/admin/mailboxes', '/admin/users', '/admin/processing', '/admin/audit', '/admin/addresses'] },
-			{ id: 'help', text: 'Help and templates', path: '/help', icon: MdHelpOutline },
+			{ id: 'myday', text: 'My day', path: '/my-day', icon: MdToday, badge: 'myday' },
+			{ id: 'sage', text: 'Mail Sage', path: '/mail-sage', icon: MdAutoAwesome },
 		],
 	},
 ];
@@ -64,5 +64,6 @@ export const titleFor = (path: string) => {
 	for (const s of menu) for (const i of s.items) if ([i.path, ...(i.also || [])].some((p) => path.startsWith(p))) return i.text;
 	if (path.startsWith('/profile')) return 'My profile';
 	if (path.startsWith('/category-report')) return 'Category report';
+	if (path.startsWith('/emails')) return 'Emails';
 	return 'Gita Mail';
 };

@@ -1,125 +1,61 @@
 # Gita Mail by Ravity
 
-AI email intelligence for **Gita Press, Gorakhpur**, built on Gmail and Google Workspace, with Gemini doing the analysis and writing draft replies.
+Email replies for **Gita Press, Gorakhpur**: complete, accurate answers from the Gita Press mailboxes
+(booksales@, manager@, retailsales@, mumbai@, kalyan@), built on Gmail and Google Workspace.
 
-Gita Mail reads the Gita Press mailboxes (each person's own inbox, plus shared ones such as orders@, kalyan@ and info@). It rebuilds every thread, removes duplicates and analyses each conversation in Hindi or English. For every email waiting on an answer it writes a **complete draft reply** that stays in the app until someone presses **Send**. Anything the AI cannot know is highlighted in yellow for the team to fill in first.
+For every email that needs a reply, Gita Mail:
+* sorts it into one of six groups (**Book order issues**, **Kalyan**, **New order — bulk**, **New order — retail**,
+  **International orders**, **Others**) with sub-tags, the 22 reasons for contacting, and a **criticality**
+  (Critical / High / Medium / Low, rising with waiting time against a reply target);
+* looks up every fact a complete reply needs in the latest uploads and master data — orders and tracking, Kalyan
+  dispatches and customers, stock at Gorakhpur and the nearest branch, the book list (Suchi) price, discount, postage,
+  bank details with the UPI QR, buy links — and shows the **completeness**;
+* drafts the reply in the reader's language with found facts **green** and missing ones **yellow**, and asks a
+  **specific question** for each missing fact (answer it on the email, or once for every email as a standing answer);
+* lets you **Rewrite properly** (AI, every figure kept, side by side), **Send** (30 seconds to undo) or **Send later**.
+  Nothing is ever sent automatically.
 
-## Features
+Bulk orders get a **quote builder**: prices from the Suchi, discount slabs, postage slabs and bank details, as a
+bilingual PDF attached to the reply.
 
-**Uploads, master data and the customer database**
-* One Uploads page for stock (weekly), orders (twice a week), Kalyan dispatch (monthly), the book list and the price list, with a five-year history and the original files.
-* Large Kalyan files (750,000 rows) are read in the browser and sent in parts, then worked through in the background.
-* Book list (Settings → Master data): one row per book code, with Hindi titles, links, title families and gaps.
-* One customer per person across email, orders and Kalyan; Platinum, Gold and Silver tiers; important-buyer alerts.
-* Reasons for contacting can be edited in Settings.
-* See [docs/STOCK_AND_INVENTORY.md](docs/STOCK_AND_INVENTORY.md).
+## Sections
 
-**Gmail and Google Workspace**
-* Sign in with Google; the person's own inbox connects automatically.
-* Shared mailboxes through Workspace domain-wide delegation, limited to the addresses an admin adds.
-* 90-day history on first connection, then incremental sync every 5 minutes (Gmail history API).
-* Duplicates across mailboxes removed by Message-ID and content fingerprint.
+| Section | What it holds |
+| --- | --- |
+| **Emails** | Outlook-style list and reading pane (right, below or off); tabs for All, the six groups, Bulk orders and quotes, Open questions, Not for reply; search, filters and sorting on every column, saved views, keyboard shortcuts |
+| **Customer database** | Kalyan customers only, uploaded only: all customers (the complete file), current-year customers, and a dashboard (new, renewed, lost, by year, state, subscription) with Excel/CSV downloads |
+| **Stock and tracking** | Book orders (tracking), branch stock, main/retail/semi-finished stock, Kalyan tracking, and All data; a check summary before each upload is applied; full history with the original files |
+| **Admin → Master data** | Locations, Others (delivery partners, Kalyan subscription types and dispatch modes, order statuses), bank details, discount, freight, book list (Suchi PDF or Excel), book links, books (combined) |
+| **Settings** | Emails (sync window, criticality and SLA, completeness facts, reason → group, Kalyan year), Pending questions (summary and weekly trend), Auto-send (coming later; cannot be switched on), Mailboxes, Users, System status (including Delete everything and rebuild), Audit log |
+| **To decide** | My day and Mail Sage, kept as they were |
 
-**Reply drafts**
-* A complete, courteous reply for every email waiting on an answer, in the reader's own language.
-* Facts the AI cannot know become yellow `[[provide: …]]` items, for example whether 5,000 Gitas can be supplied in 2 months.
-* Send is blocked until every yellow item is filled in.
-* Send goes through Gmail, from the mailbox the reader wrote to, as a reply in the same thread.
-* Reference information and a signature set in Settings make drafts more complete.
-* Edits are kept, and drafts disappear when someone replies directly in Gmail.
+See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**.
 
-**Groups, subgroups and default replies**
-* Every thread gets a group (heading) and a subgroup (subheading), for example Kalyan subscriptions → Issue not received. 13 groups, 52 subgroups.
-* A default reply template for each of the 45 subgroups that normally need an answer. Claude follows it, translates it for Hindi letters and fills in what it can.
-* Help and templates: how it works, the full category list, the templates (managers can edit or restore them) and reference data.
-* Reference data: upload the book catalogue, FAQs and policies as CSV. Matching entries are given to Claude for each email, so prices, stock and rules are filled in instead of left yellow.
-* Category report (Email → Category report): groups as headings and subgroups as subheadings, with threads, waiting replies, negative and red threads, drafts and first-reply time. Print or download as CSV.
-* Threads analysed before subgroups existed are sorted by the rules engine in the background, with no AI cost.
+## Install
 
-**Stock, addresses and inventory** ([guide](docs/STOCK_AND_INVENTORY.md))
-* Upload the Tally stock summaries in two slots, head office (Main, Retail and Semi-finished) and branches. The Excel files are used as exported, and every upload is kept.
-* Drafts quote exact stock and the highest batch price for Gorakhpur and the branch nearest the reader (from city, PIN or state). Books in Hindi or English letters are matched to Tally names, and an optional Hindi title list can be uploaded.
-* Readers who ask for an address get the branch they named, or the full official list (English and Hindi).
-* Inventory → Stock and sales covers:
-  * stock status and estimated sales trends by branch
-  * top sellers
-  * what to send to each branch, using days of cover and lead time
-  * books each branch should stock
-  * slow movers to transfer
-  * books readers ask for, and back-in-stock follow-ups.
+* **Windows desktop** (own PostgreSQL): **[docs/INSTALL_LOCAL_WINDOWS.md](docs/INSTALL_LOCAL_WINDOWS.md)** — `deploy\windows\install.ps1`
+* **Google Cloud** (one VM, self-managed PostgreSQL, nginx, HTTPS, nightly backups to Cloud Storage):
+  **[docs/INSTALL_CLOUD_GCP.md](docs/INSTALL_CLOUD_GCP.md)** — `deploy/gcp/create-vm.sh`
+* Google sign-in and shared mailboxes: **[docs/GOOGLE_WORKSPACE_SETUP.md](docs/GOOGLE_WORKSPACE_SETUP.md)**
 
-  Every table can be downloaded as Excel.
+Both run the same program: `npm run build` then `npm start` (`server/main.ts`: web app, API, mail sync, analysis,
+uploads and the send queue in one Node.js process). Settings come from `.env` ([.env.example](.env.example)).
 
-**Reasons for contacting**
-* Each thread gets one or more of 22 reasons, for example Kalyan, book order, order tracking, international, bulk order, dealer, content or printing suggestions and seva. The customer record collects all of them.
-* The customer database filters by "contacted for" (any or all) and "never contacted for", plus city, country and language, with Excel export and per-customer upsell and cross-sell ideas.
+## Develop
 
-**Analysis built for Gita Press**
-* Email types:
-  * reader and customer service
-  * book orders and e-books
-  * Kalyan subscriptions
-  * dispatch, VPP and delivery
-  * bulk orders, distributors and quotes
-  * publications, translations and editorial
-  * payments, refunds and accounts
-  * printing, paper and suppliers
-  * careers and staff
-  * internal, events and media, automated
-* Issue types:
-  * delivery delay, order not received
-  * damaged or misprinted book, wrong item
-  * payment deducted, refund
-  * Kalyan subscription, address change
-  * VPP tracking, website or app problems
-  * bulk orders, language and edition requests
-  * scripture questions, escalation
-* Hindi and English understood; summaries in English.
-* Red, amber and green rating with the reason, priority, escalation risk, and reader and customer health.
-
-**Everything from remail**
-* My day, Overview, Email by category, Readers and customers, Bulk orders and quotes pipeline.
-* Actions and commitments, Alerts with escalation, Trends, Team performance, scheduled Reports, Mail Sage.
-* Roles (admin, manager, analyst, viewer) with My view and Management view.
-* Audit log, PII redaction before AI, encrypted tokens.
+```bash
+npm ci
+cp .env.example .env         # DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY (npm run keys), ADMIN_EMAIL, ADMIN_PASSWORD
+npm run migrate
+npm run dev:api              # API and worker on :8888
+npm run dev                  # web app on :5173
+npm test                     # needs DATABASE_URL to an empty test database
+npm run typecheck
+```
 
 ## Stack
 
-* **Frontend:** React 18, Vite, TanStack Query, ApexCharts. Gita Press theme: maroon, saffron and cream, Noto Sans and Noto Sans Devanagari.
-* **Backend:** Netlify Functions v2 (TypeScript).
-  * `api`: the REST API
-  * `scheduler`: runs every 5 minutes
-  * `worker-background`: sync and analysis
-* **Database:** PostgreSQL (Netlify Database or Neon). Migrations run automatically.
-* **AI:** Anthropic Claude (`AI_PROVIDER=anthropic`, prompt caching on) or Google Gemini, with structured output. A rules engine tuned for Gita Press is the fallback; without the AI it drafts from the default templates.
-
-## Set up
-
-**[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** goes step by step through:
-* Gemini
-* Netlify
-* Google Cloud
-* Workspace delegation
-* sign-in
-* reply drafts
-
-## Run on your own computer (local edition)
-
-Run everything (web app, database, mail reading) on one computer with Docker or Node.js, using the same `.env` as Netlify. Guides: [with your own PostgreSQL and Node.js](docs/LOCAL_SETUP_NODE.md) or [with Docker](docs/LOCAL_SETUP.md). Settings template: `local/env.local.template`; check before starting with `npm run local:check`.
-
-```
-docker compose up -d --build     # then open http://localhost:8888
-```
-
-## Run locally for development
-
-```bash
-npm install
-cp .env.example .env    # DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY, ADMIN_EMAIL, ADMIN_PASSWORD, GOOGLE_*, GEMINI_API_KEY
-set -a; source .env; set +a
-npm run migrate
-DEMO_DATA_ENABLED=true npm run seed   # optional Gita Press demo data
-npm run dev:api                      # API on :8888
-npm run dev                          # app on :5173
-npm test                             # pipeline tests (empty test database)
-```
+React 18, Vite, TanStack Query and ApexCharts; Node.js 22 with TypeScript (tsx); PostgreSQL 16 (migrations run on
+start); pdfkit with Noto Sans Devanagari for quotes; pdf.js (and poppler's pdftotext when installed) for the Suchi PDF.
+AI (optional): Anthropic Claude or Google Gemini for analysis and Rewrite; without a key the rules engine does
+everything else.

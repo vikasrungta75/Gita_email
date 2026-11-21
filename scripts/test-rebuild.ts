@@ -74,8 +74,14 @@ if (fs.existsSync(pdf)) {
 assert.deepEqual(orderIdsIn('Where is my order GPHO_351981 and gpho 351980?'), ['GPHO_351981', 'GPHO_351980']);
 assert.deepEqual(custnosIn('मेरी कल्याण ग्राहक संख्या 345262 है'), ['345262']);
 assert.deepEqual(custnosIn('Kalyan customer no. 4670'), ['4670']);
+assert.deepEqual(custnosIn('मेरी कल्याण ग्राहक संख्या 1 है।'), ['1'], 'short Kalyan numbers');
 assert.deepEqual(booksWithQty('code 6 x 10, 1388 - 2'), [{ code: '6', qty: 10 }, { code: '1388', qty: 2 }]);
 assert.equal(stateByPrefix('UTTAR PRAD'), 'Uttar Pradesh');
+const { greetingName } = await import('../server/email/enrich');
+assert.equal(greetingName('Shri Krishna Seva Trust'), '', 'no first name for a trust');
+assert.equal(greetingName('Dr. N.R. Rao'), 'N.R.');
+assert.equal(greetingName('Smt Sita Devi'), 'Sita');
+assert.equal(greetingName('anita mishra'), 'Anita');
 assert.equal(stateByPrefix('WEST BENGA'), 'West Bengal');
 assert.equal(stateByPrefix('MADHYA PRA'), 'Madhya Pradesh');
 assert.deepEqual(checkHeader('kalyan_current', ['Duration', 'No', 'Name', 'Address', 'Location', 'State', 'Country', 'Post code', '', '']).slice(8), ['Receipt no', 'Payment date']);

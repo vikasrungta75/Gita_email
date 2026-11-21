@@ -37,15 +37,15 @@ export default function MasterData() {
 
 // ── Books ────────────────────────────────────────────────────────────────────
 
-const COLS: [string, string][] = [['code', 'Code'], ['name', 'English name'], ['language', 'Language'], ['hindi', 'Hindi title'], ['family', 'Title family'], ['gitapress', 'gitapress.org'], ['amazon', 'Amazon'], ['mrp', 'Price'], ['status', 'Status']];
+const COLS: [string, string][] = [['code', 'Code'], ['name', 'English name'], ['language', 'Language'], ['hindi', 'Hindi title'], ['size', 'Size'], ['pages', 'Pages'], ['carton', 'Per carton'], ['price', 'Price'], ['gitapress', 'gitapress.org'], ['amazon', 'Amazon'], ['status', 'Status']];
 
-function Books() {
+export function Books() {
 	const { can } = useAuth();
 	const manager = can('manager');
 	const toast = useToast();
 	const qc = useQueryClient();
 	const [sp, setSp] = useSearchParams();
-	const f = { q: sp.get('q') || '', language: sp.get('language') || '', missing: sp.get('missing') || '', status: sp.get('status') || '', sort: sp.get('sort') || 'code', dir: sp.get('dir') || 'asc' };
+	const f = { q: sp.get('q') || '', language: sp.get('language') || '', missing: sp.get('missing') || '', status: sp.get('status') || '', source: sp.get('source') || '', size: sp.get('size') || '', sort: sp.get('sort') || 'code', dir: sp.get('dir') || 'asc' };
 	const setF = (patch: Partial<typeof f>) => { const n = new URLSearchParams(sp); for (const [k, v] of Object.entries(patch)) { if (v) n.set(k, v); else n.delete(k); } setSp(n, { replace: true }); };
 	const [search, setSearch] = useState(f.q);
 	useEffect(() => { const t = setTimeout(() => search !== f.q && setF({ q: search }), 300); return () => clearTimeout(t); });
@@ -66,15 +66,18 @@ function Books() {
 	const link = (u?: string) => (u ? <a href={u} target="_blank" rel="noreferrer" className="xs">open</a> : <span className="faint xs">missing</span>);
 	return (
 		<>
-			<Card className="mb-16" title="Book list" accent={COLORS.teal}
-				sub={<>One row per book code. Stock, links, prices, replies and recommendations all use the code. Upload the whole list on the <Link to="/uploads">Uploads</Link> page; a code that first appears in a Tally stock file is added here automatically and marked "Needs details".</>}
+			<Card className="mb-16" title="Books (combined)" accent={COLORS.teal}
+				sub={<>One row per book code, joining the book list (Suchi: size, pages, books per carton, price, editions, sets) and the book links file (English name, Hindi title, gitapress.org and Amazon links). Every reply and quote uses this record. Edit any row; a price, size, pages or carton edited here is kept when the next Suchi is uploaded. A code that first appears in a stock file is added automatically and marked "Needs details".</>}
 				actions={<div className="row gap-8">
 					{manager && <button className="btn sm primary" onClick={() => setEdit({ code: '', name: '', language: 'Hindi', _new: true })}><MdAdd /> Add a book</button>}
 					<button className="btn sm" onClick={async () => save(await (await get(`/master/books${qs({ ...f, format: 'xlsx' })}`)).blob(), 'gitamail-book-list.xlsx')}><MdDownload /> Excel</button>
 					<button className="btn sm" onClick={async () => { const w = window.open('', '_blank'); const r = await get(`/master/books${qs({ ...f, format: 'print' })}`); if (w) { w.document.write(await r.text()); w.document.close(); } }}><MdPrint /> PDF</button>
 				</div>}>
 				<div className="row wrap gap-16 small">
-					<span><b>{num(t.books)}</b> books</span><span><b>{num(t.families)}</b> title families</span>
+					<span><b>{num(t.books)}</b> books</span><span><b>{num(t.in_both)}</b> in both files</span>
+					<button className="btn ghost sm" onClick={() => setF({ missing: 'only_in_suchi' })}>{num(flagN('only_in_suchi'))} only in the Suchi</button>
+					<button className="btn ghost sm" onClick={() => setF({ missing: 'only_in_links' })}>{num(flagN('only_in_links'))} only in the links file</button>
+					<button className="btn ghost sm" onClick={() => setF({ missing: 'no_price' })}>{num(flagN('no_price'))} without a price</button>
 					<button className="btn ghost sm" onClick={() => setF({ status: 'needs_details' })}><span className="badge amber">{num(t.needs_details)}</span> need details</button>
 					<button className="btn ghost sm" onClick={() => setF({ missing: 'no_amazon_link' })}>{num(flagN('no_amazon_link'))} without an Amazon link</button>
 					<button className="btn ghost sm" onClick={() => setF({ missing: 'no_gitapress_link' })}>{num(flagN('no_gitapress_link'))} without a gitapress.org link</button>
@@ -92,7 +95,13 @@ function Books() {
 				<select className={`input sm drop ${f.status ? 'on' : ''}`} value={f.status} onChange={(e) => setF({ status: e.target.value })} aria-label="Status">
 					<option value="">Active and needs details</option><option value="active">Active</option><option value="needs_details">Needs details</option><option value="removed">Removed ({num(t.removed)})</option>
 				</select>
-				{(f.q || f.language || f.missing || f.status) && <button className="btn ghost sm" onClick={() => { setSearch(''); setF({ q: '', language: '', missing: '', status: '' }); }}>Clear filters</button>}
+				<select className={`input sm drop ${f.source ? 'on' : ''}`} value={f.source} onChange={(e) => setF({ source: e.target.value })} aria-label="Source">
+					<option value="">Either file</option><option value="both">In both files</option><option value="suchi">In the Suchi</option><option value="links">In the links file</option>
+				</select>
+				<select className={`input sm drop ${f.size ? 'on' : ''}`} value={f.size} onChange={(e) => setF({ size: e.target.value })} aria-label="Size">
+					<option value="">Every size</option>{['Jumbo', 'Large', 'Medium', 'Small', 'Tiny', 'Sticker'].map((x) => <option key={x}>{x}</option>)}
+				</select>
+				{(f.q || f.language || f.missing || f.status || f.source || f.size) && <button className="btn ghost sm" onClick={() => { setSearch(''); setF({ q: '', language: '', missing: '', status: '', source: '', size: '' }); }}>Clear filters</button>}
 			</div>
 			<Card flush>
 				{isLoading ? <Loader /> : !data?.rows?.length ? <Empty text="No books match." /> : (
@@ -104,11 +113,12 @@ function Books() {
 									<td className="mono small">{b.code}</td>
 									<td className="small" style={{ maxWidth: 280 }}><b>{b.name}</b>{b.aliases?.length ? <div className="xs faint truncate">Also: {b.aliases.join('; ')}</div> : null}</td>
 									<td className="small">{b.language}</td>
-									<td className="small" style={{ maxWidth: 220 }}>{b.hindi_title || <span className="faint">–</span>}</td>
-									<td className="xs" style={{ maxWidth: 180 }}>{b.family ? <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); setSearch(b.family); setF({ q: b.family }); }} title="Show every edition">{b.family}</button> : '–'}{b.family_manual ? <span className="faint"> (set by hand)</span> : null}</td>
+									<td className="small" style={{ maxWidth: 220 }}>{b.hindi_title || (b.suchi_title && /[\u0900-\u097F]/.test(b.suchi_title) ? <span className="faint">{b.suchi_title}</span> : <span className="faint">–</span>)}{b.best_seller ? <span className="badge" style={{ marginLeft: 4 }}>Best seller</span> : null}{b.set_code ? <div className="xs faint">Set {b.set_code}</div> : null}</td>
+									<td className="xs">{b.size_en || '–'}</td><td className="num xs">{b.pages ?? '–'}</td><td className="num xs">{b.carton ?? '–'}</td>
+									<td className="num small">{b.suchi_price != null ? inr(b.suchi_price) : b.mrp != null ? inr(b.mrp) : <span className="faint">–</span>}{(b.edited_fields || []).includes('suchi_price') ? <div className="xs faint">set here</div> : null}</td>
 									<td>{link(b.gitapress_url)}</td><td>{link(b.amazon_url)}</td>
-									<td className="num small">{b.mrp != null ? inr(b.mrp) : <span className="faint">–</span>}</td>
 									<td className="small">{b.status === 'needs_details' ? <span className="badge amber">Needs details</span> : b.status === 'removed' ? <span className="badge">Removed</span> : 'Active'}
+										<div className="xs faint">{b.in_suchi && b.in_links ? 'Suchi + links' : b.in_suchi ? 'Suchi only' : b.in_links ? 'Links only' : ''}</div>
 										{(b.flags || []).includes('shared_link') && <div className="xs faint">link shared with another code</div>}</td>
 									<td className="nowrap" onClick={(e) => e.stopPropagation()}>{manager && (b.status === 'removed'
 										? <button className="btn ghost icon sm" title="Restore" aria-label="Restore" onClick={() => restore.mutate(b.code)}><MdRestore /></button>
@@ -132,7 +142,7 @@ function BookEditor({ b, onClose, languages }: { b: any; onClose: () => void; la
 	const toast = useToast();
 	const qc = useQueryClient();
 	const isNew = !!b._new;
-	const [f, setF] = useState<any>({ code: b.code, name: b.name, language: b.language, hindi_title: b.hindi_title || '', aliases: (b.aliases || []).join('; '), gitapress_url: b.gitapress_url || '', amazon_url: b.amazon_url || '', family: b.family_manual ? b.family : '', category: b.category || '', mrp: b.mrp ?? '', lead_days: b.lead_days ?? '', cover_days: b.cover_days ?? '', min_print: b.min_print ?? '' });
+	const [f, setF] = useState<any>({ code: b.code, name: b.name, language: b.language, hindi_title: b.hindi_title || '', aliases: (b.aliases || []).join('; '), gitapress_url: b.gitapress_url || '', amazon_url: b.amazon_url || '', family: b.family_manual ? b.family : '', category: b.category || '', suchi_price: b.suchi_price ?? b.mrp ?? '', size_en: b.size_en || '', pages: b.pages ?? '', carton: b.carton ?? '' });
 	const go = useMutation({
 		mutationFn: () => (isNew ? api('/master/books', { body: f }) : api(`/master/books/${encodeURIComponent(b.code)}`, { method: 'PATCH', body: { ...f, code: undefined } })),
 		onSuccess: () => { qc.invalidateQueries({ queryKey: ['books'] }); toast(isNew ? 'Book added' : 'Book saved'); onClose(); },
@@ -153,11 +163,11 @@ function BookEditor({ b, onClose, languages }: { b: any; onClose: () => void; la
 				{field('gitapress_url', 'gitapress.org link', 'A page on gitapress.org')}
 				{field('amazon_url', 'Amazon link', 'A page on amazon.in or amazon.com')}
 				{field('family', 'Title family', b.family && !b.family_manual ? `Filled in automatically: "${b.family}". Type a name to set it by hand; leave empty to keep it automatic.` : 'Groups the language editions of one work. Leave empty to fill it in automatically.')}
-				{field('category', 'Category', 'For example Children, Gita, Ramayana. Used for catalogues.')}
-				{field('mrp', 'Price (MRP)', 'Used only when the book has no batch at Gorakhpur.', 'number')}
-				{field('lead_days', 'Print lead time (days)', 'Leave empty for the general value.', 'number')}
-				{field('cover_days', 'Days of stock to print for', 'Leave empty for the general value.', 'number')}
-				{field('min_print', 'Minimum print run', 'Leave empty for none.', 'number')}
+				{field('suchi_price', 'Price (₹)', 'The price used in replies and quotes. Kept when the next Suchi is uploaded.', 'number')}
+				<div className="field"><label>Size</label><select className="input" value={f.size_en} onChange={(e) => setF({ ...f, size_en: e.target.value })}><option value="">–</option>{['Jumbo', 'Large', 'Medium', 'Small', 'Tiny', 'Sticker'].map((x) => <option key={x}>{x}</option>)}</select></div>
+				{field('pages', 'Pages', undefined, 'number')}
+				{field('carton', 'Books per carton', undefined, 'number')}
+				{b.suchi_title && <div className="field" style={{ gridColumn: '1 / -1' }}><label>Title in the Suchi</label><div className="small">{b.suchi_title}</div>{b.editions?.length ? <span className="hint">Other editions: {b.editions.map((e: any) => `${e.language} ${e.codes.join(', ')}`).join(' · ')}</span> : null}</div>}
 			</div>
 		</Modal>
 	);
@@ -218,7 +228,7 @@ const MAP_SECTIONS: { k: string; l: string; sub: string; keyLabel: string; valLa
 	{ k: 'dispMode', l: 'Kalyan dispatch modes', sub: 'How each dispatch mode is described.', keyLabel: 'Code', valLabel: 'Meaning' },
 ];
 
-function Mappings() {
+export function Mappings() {
 	const { can } = useAuth();
 	const toast = useToast();
 	const qc = useQueryClient();

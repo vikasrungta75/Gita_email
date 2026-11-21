@@ -1,3 +1,5 @@
+> **Note (November 2026 rebuild):** the stock planning screens described here (Inventory → Stock and sales) are switched off for now and the customer tiers are no longer used; their code is kept so they can return. Uploads now live in **Stock and tracking**, and the book list in **Admin → Master data**. See [USER_GUIDE.md](USER_GUIDE.md).
+
 # Stock, addresses, reasons for contacting and inventory
 
 This guide covers four things:
@@ -7,7 +9,7 @@ This guide covers four things:
 * the **Inventory → Stock and sales** section
 * how to load stock files.
 
-The same code runs in the hosted (Netlify) edition and the local Docker edition. Nothing extra needs to be set up: the new tables are created automatically on the next start or deploy (migration `011`).
+The same code runs on the desktop and on the Google Cloud server. Nothing extra needs to be set up: the new tables are created automatically on the next start or deploy (migration `011`).
 
 ## 1. Uploading stock
 
@@ -159,5 +161,5 @@ Everything is uploaded on the **Uploads** page. Each kind shows when it was last
 
 ## Notes
 
-* **Request size.** Netlify accepts requests up to about 6 MB. A Tally export of about 2 MB uploads comfortably. If a future file is much larger, split it into two branch files for the same period, each with different branches.
+* **Request size.** Requests up to about 25 MB are accepted. A Tally export of about 2 MB uploads comfortably. If a future file is much larger, split it into two branch files for the same period, each with different branches.
 * **Where to start.** The figures improve with history. Load the last 12 monthly files first, then upload the latest stock summary as often as you like.

@@ -44,7 +44,8 @@ export function orderIdsIn(text: string): string[] {
 }
 export function custnosIn(text: string): string[] {
 	const out = new Set<string>();
-	const re = /(?:kalyan|कल्याण|customer|cust\.?|subscriber|subscription|member(?:ship)?|ग्राहक|सदस्य(?:ता)?)\s*(?:no\.?|number|id|code|#|संख्या|सं\.?|क्रमांक|नं\.?|नंबर)\s*[:#.-]?\s*([A-Z]{0,4}-?\d{3,7})\b/gi;
+	// a number right after "customer no." / "ग्राहक संख्या" (Kalyan numbers run from 1 to 6 digits)
+	const re = /(?:kalyan|कल्याण|customer|cust\.?|subscriber|subscription|member(?:ship)?|ग्राहक|सदस्य(?:ता)?)\s*(?:no\.?|number|id|code|#|संख्या|सं\.?|क्रमांक|नं\.?|नंबर)\s*(?:है|is)?\s*[:#.-]?\s*([A-Z]{0,4}-?\d{1,7})(?![\d/])/gi;
 	for (const m of text.matchAll(re)) out.add(m[1].toUpperCase().replace(/^[A-Z]+-/, ''));
 	return [...out].slice(0, 3);
 }
@@ -62,6 +63,16 @@ export function parseBooksAnswer(v: string): { code: string; qty: number | null 
 	}).filter(Boolean) as { code: string; qty: number | null }[];
 }
 const PIN_RE = /\b([1-8]\d{5})\b/;
+
+/** The name to greet: a person's first name (after Shri, Smt, Dr…), none for a trust, temple, school or company. */
+export function greetingName(name: string): string {
+	const n = name.replace(/["'<>]/g, '').trim();
+	if (!n || /@/.test(n)) return '';
+	if (/\b(trust|samiti|sansthan|mandir|temple|school|vidyalaya|college|ashram|mission|foundation|society|sangh|pvt|ltd|limited|llp|company|enterprises|traders|book ?(stall|depot|store|centre|center)|prakashan|kendra|team|updates|support|service)\b/i.test(n)) return '';
+	const words = n.split(/\s+/).filter((w) => !/^(shri|sri|shree|smt|smt\.|kumari|km|dr|dr\.|mr|mr\.|mrs|mrs\.|ms|ms\.|prof|prof\.|pt|pandit|swami|श्री|श्रीमती|डॉ\.?|सुश्री|पं\.?)$/i.test(w));
+	const w = words[0] || '';
+	return w.length > 1 ? w[0].toUpperCase() + w.slice(1) : '';
+}
 
 // ── classification ─────────────────────────────────────────────────────────
 const NOT_FOR_REPLY_GROUPS = new Set(['notifications', 'internal', 'vendor_partner']);
@@ -232,8 +243,11 @@ export async function buildReply(c: Ctx): Promise<Built> {
 	const L = (en: string, hi: string) => (H ? hi : en);
 	const needed = factsFor(c.cfg, c.group, c.subTags);
 	const sig = ((await getOrg(c.orgId)).settings.replySignature || '').trim() || L('Regards,\nGita Press, Gorakhpur', 'सादर,\nगीताप्रेस, गोरखपुर');
-	const first = (c.sender.name || '').split(/\s+/)[0];
+	const first = greetingName(c.sender.name || '');
 	const greeting = H ? `आदरणीय ${first ? `${first} जी` : 'महोदय/महोदया'},` : `Dear ${first || 'Sir/Madam'},`;
+	const subLabel = (k: string) => (H ? ({ '1Y': 'एक वर्ष', FY: 'पाँच वर्ष', LM: 'आजीवन सदस्य' } as Record<string, string>)[k] : null) || m.subperiod[k] || k;
+	const modeLabel = (k: string) => (H ? ({ ORDINARY: 'साधारण डाक (ट्रैकिंग नहीं)', REGISTERED: 'रजिस्टर्ड डाक', 'BY SHOP': 'दुकान से प्राप्त' } as Record<string, string>)[k] : null) || m.dispMode[k] || k;
+	const copies = (n: number) => `${Math.round(n).toLocaleString('en-IN')} ${H ? 'प्रतियाँ' : Math.round(n) === 1 ? 'copy' : 'copies'}`;
 	const m = await getMappings(c.orgId);
 
 	/** a found fact (green) or a question (yellow); returns the text to put in the draft */
@@ -305,10 +319,10 @@ export async function buildReply(c: Ctx): Promise<Built> {
 		if (tag === 'new_request') {
 			const prices = await getMaster(c.orgId, 'kalyan_prices');
 			const priced = Object.entries(prices.prices).filter(([, v]) => v !== null && v !== undefined);
-			const priceText = priced.length === Object.keys(prices.prices).length && priced.length ? priced.map(([k, v]) => `${m.subperiod[k] || k}: ${inr(Number(v))}`).join('; ') : null;
+			const priceText = priced.length === Object.keys(prices.prices).length && priced.length ? priced.map(([k, v]) => `${subLabel(k)}: ${inr(Number(v))}`).join('; ') : null;
 			parts.push(L('Thank you for your interest in subscribing to Kalyan. The subscription options are:', 'कल्याण की सदस्यता में रुचि के लिए धन्यवाद। सदस्यता के विकल्प इस प्रकार हैं:'));
 			parts.push(`${L('Subscription', 'सदस्यता')}: ${put('kalyan_prices', priceText, 'Kalyan prices (master data)')}`);
-			parts.push(`${L('Dispatch', 'प्रेषण')}: ${put('kalyan_modes', Object.entries(m.dispMode).filter(([k]) => k !== 'BY SHOP').map(([, v]) => v).join('; '), 'Kalyan dispatch modes (master data)')}`);
+			parts.push(`${L('Dispatch', 'प्रेषण')}: ${put('kalyan_modes', Object.keys(m.dispMode).filter((k) => k !== 'BY SHOP').map(modeLabel).join('; '), 'Kalyan dispatch modes (master data)')}`);
 			parts.push(L('You can pay by bank transfer to:', 'आप बैंक द्वारा इस खाते में भुगतान कर सकते हैं:'));
 			parts.push(await bankBlock());
 		} else {
@@ -317,11 +331,11 @@ export async function buildReply(c: Ctx): Promise<Built> {
 			rows.push(`${L('Kalyan customer number', 'कल्याण ग्राहक संख्या')}: ${put('kalyan_custno', k?.custno || null, k ? 'Kalyan customers / tracking' : null)}`);
 			const subType = k?.year?.sub_type || k?.cust?.sub_type || k?.disp?.subperiod || k?.sub?.sub_type || '';
 			if (k) {
-				if (needed.includes('kalyan_type')) rows.push(`${L('Subscription', 'सदस्यता')}: ${put('kalyan_type', subType ? (m.subperiod[subType] || subType) : null, 'Kalyan customers')}`);
+				if (needed.includes('kalyan_type')) rows.push(`${L('Subscription', 'सदस्यता')}: ${put('kalyan_type', subType ? subLabel(subType) : null, 'Kalyan customers')}`);
 				if (needed.includes('kalyan_dispatch')) {
 					const d = k.disp;
 					const issues = d ? (d.from_issue === d.to_issue ? `${L('issue', 'अंक')} ${d.to_issue}` : `${L('issues', 'अंक')} ${d.from_issue}–${d.to_issue}`) : '';
-					rows.push(`${L('Last dispatch', 'पिछला प्रेषण')}: ${put('kalyan_dispatch', d ? `${issues}, ${day(d.dispdate, H)}, ${m.dispMode[d.mode] || d.mode}` : null, 'Kalyan tracking')}`);
+					rows.push(`${L('Last dispatch', 'पिछला प्रेषण')}: ${put('kalyan_dispatch', d ? `${issues}, ${day(d.dispdate, H)}, ${modeLabel(d.mode)}` : null, 'Kalyan tracking')}`);
 				}
 				if (needed.includes('kalyan_tracking')) {
 					const d = k.disp;
@@ -363,7 +377,7 @@ export async function buildReply(c: Ctx): Promise<Built> {
 		for (const l of b.lines) {
 			const name = H && l.hindi ? l.hindi : l.title;
 			const av = l.hqQty === null ? null
-				: `${l.hqQty > 0 ? L(`available at Gorakhpur (${Math.round(l.hqQty)} copies)`, `गोरखपुर में उपलब्ध (${Math.round(l.hqQty)} प्रतियाँ)`) : L('currently out of stock at Gorakhpur', 'गोरखपुर में अभी उपलब्ध नहीं')}${!intl && l.near ? `; ${l.near.qty > 0 ? L(`${l.near.label} branch: ${Math.round(l.near.qty)} copies`, `${BY_KEY.get(b.nearest!)?.city_hi || l.near.label} शाखा: ${Math.round(l.near.qty)} प्रतियाँ`) : L(`${l.near.label} branch: out of stock`, `${BY_KEY.get(b.nearest!)?.city_hi || l.near.label} शाखा: उपलब्ध नहीं`)}` : ''}`;
+				: `${l.hqQty > 0 ? L(`available at Gorakhpur (${copies(l.hqQty)})`, `गोरखपुर में उपलब्ध (${copies(l.hqQty)})`) : L('currently out of stock at Gorakhpur', 'गोरखपुर में अभी उपलब्ध नहीं')}${!intl && l.near ? `; ${l.near.qty > 0 ? L(`${l.near.label} branch: ${copies(l.near.qty)}`, `${BY_KEY.get(b.nearest!)?.city_hi || l.near.label} शाखा: ${copies(l.near.qty)}`) : L(`${l.near.label} branch: out of stock`, `${BY_KEY.get(b.nearest!)?.city_hi || l.near.label} शाखा: उपलब्ध नहीं`)}` : ''}`;
 			const avText = put('availability', av, `stock as of ${l.stockAsOf || '–'}`, `availability:${l.code}`, `Stock for code ${l.code} is not uploaded — is it available, and how many copies?`);
 			const prText = put('price', l.price !== null ? inr(l.price) : null, l.priceFrom, `price:${l.code}`, `Price of code ${l.code}`);
 			if (l.price === null) priceMissing = true; else value += l.price * l.qty;
@@ -407,8 +421,9 @@ export async function buildReply(c: Ctx): Promise<Built> {
 	// make sure every needed fact appears in the list (found or not)
 	for (const k of needed) if (!facts.some((f) => f.key === k)) facts.push({ key: k, label: FACTS[k]?.label || k, value: null, source: null });
 	if (c.group === 'others') return { facts: [], questions: [], body: null };
-	const closing = L('With regards and best wishes,', 'सादर शुभकामनाओं सहित,');
-	const body = [greeting, '', ...parts.flatMap((p) => [p, '']), closing, sig].join('\n').replace(/\n{3,}/g, '\n\n');
+	// the signature usually starts with its own closing ("Regards,"): then no second one is added
+	const closing = /^(regards|with regards|yours|thanks|thank you|warm regards|sincerely|सादर|धन्यवाद|भवदीय)/i.test(sig) ? '' : L('With regards and best wishes,', 'सादर शुभकामनाओं सहित,');
+	const body = [greeting, '', ...parts.flatMap((p) => [p, '']), ...(closing ? [closing] : []), sig].join('\n').replace(/\n{3,}/g, '\n\n');
 	return { facts, questions, body, bulk };
 }
 

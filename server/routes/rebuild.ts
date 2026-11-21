@@ -259,7 +259,9 @@ Rules:
 		requireRole(ctx.user, 'analyst');
 		const d = await getDraftForConversation(Number(ctx.params.id), ctx.user!.orgId);
 		if (!d) throw new HttpError(404, 'Draft not found');
-		return cancelSend(ctx, ctx.user!, d.id);
+		const res = await cancelSend(ctx, ctx.user!, d.id);
+		await enrichConversation(Number(ctx.params.id));
+		return res;
 	});
 
 	// attachments: fetched from Gmail when opened

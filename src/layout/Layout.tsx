@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { MdKeyboardArrowDown, MdKeyboardArrowUp, MdMenu, MdMenuOpen, MdNotificationsNone, MdSearch, MdLogout, MdPerson, MdSync } from 'react-icons/md';
+import { MdKeyboardArrowDown, MdKeyboardArrowUp, MdMenu, MdMenuOpen, MdSearch, MdLogout, MdPerson, MdSync } from 'react-icons/md';
 import { menu, titleFor } from '../menu';
 import { useAuth } from '../contexts/AuthContext';
 import { useFilters } from '../contexts/FilterContext';
@@ -50,15 +50,12 @@ export default function Layout() {
 
 	const { filters, set: setFilters } = useFilters();
 	const myday = useQuery({ queryKey: ['my-day'], queryFn: () => api('/views/my-day'), refetchInterval: 120_000 });
-	const alerts = useQuery({ queryKey: ['alert-counts'], queryFn: () => api('/alerts?status=open'), refetchInterval: 60_000 });
 	const sys = useQuery({ queryKey: ['system-status'], queryFn: () => api('/system/status'), refetchInterval: 120_000, enabled: can('manager') });
 	const aiPaused = sys.data?.progress?.ai_paused_until && new Date(sys.data.progress.ai_paused_until) > new Date();
 	const summary = useQuery({ queryKey: ['nav-summary'], queryFn: () => api('/dashboard/summary'), refetchInterval: 120_000 });
-	const drafts = useQuery({ queryKey: ['nav-drafts', filters.view], queryFn: () => api(`/drafts?status=draft${filters.view === 'me' ? '&view=me' : ''}`), refetchInterval: 120_000 });
+	const emailsMeta = useQuery({ queryKey: ['emails-meta'], queryFn: () => api('/emails/meta'), refetchInterval: 60_000 });
 	const badge = (b?: string) => {
-		if (b === 'alerts') return alerts.data?.counts?.open || 0;
-		if (b === 'critical') return summary.data?.critical?.filter((c: any) => c.rag === 'red').length || 0;
-		if (b === 'drafts') return drafts.data?.counts?.draft || 0;
+		if (b === 'emails') return (emailsMeta.data?.counts || []).filter((c: any) => !c.nfr && ['pending', 'ready'].includes(c.s)).reduce((a: number, c: any) => a + c.n, 0);
 		if (b === 'myday') return (myday.data?.stats?.awaiting || 0) + (myday.data?.stats?.actionsOverdue || 0);
 		return 0;
 	};
@@ -68,7 +65,7 @@ export default function Layout() {
 		<div className={`app ${min ? 'aside-min' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
 			<aside className="aside" aria-label="Main navigation">
 				<div className="aside-head">
-					<NavLink to="/overview" className="brand" aria-label="Gita Mail home">
+					<NavLink to="/emails" className="brand" aria-label="Gita Mail home">
 						<img className="brand-logo" src="/brand/gitapress-logo.png" alt="Gita Press" />
 						<div className="brand-text">
 							<div className="brand-name"><span>Gita</span> Mail</div>
@@ -122,15 +119,11 @@ export default function Layout() {
 					)}
 					<form
 						className="header-search"
-						onSubmit={(e) => { e.preventDefault(); if (search.trim()) nav(`/conversations?q=${encodeURIComponent(search.trim())}`); }}
+						onSubmit={(e) => { e.preventDefault(); if (search.trim()) nav(`/emails?tab=all&showSent=1&q=${encodeURIComponent(search.trim())}`); }}
 					>
 						<MdSearch />
-						<input placeholder="Search customers, subjects, emails" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
+						<input placeholder="Search emails, order no., Kalyan no., book code" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
 					</form>
-					<button className="btn ghost icon icon-btn" onClick={() => nav('/alerts')} aria-label="Alerts">
-						<MdNotificationsNone style={{ fontSize: 22 }} />
-						{(alerts.data?.counts?.open || 0) > 0 && <span className="dot">{alerts.data.counts.open}</span>}
-					</button>
 					<div ref={userMenu} style={{ position: 'relative' }}>
 						<button className="user-chip" onClick={() => setMenuOpen(!menuOpen)}>
 							<span className="avatar">{initials}</span>
