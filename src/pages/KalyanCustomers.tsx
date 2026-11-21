@@ -10,14 +10,14 @@ import { MdDownload, MdSearch } from 'react-icons/md';
 import { api, qs } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Card, Empty, Kpi, Loader, Modal, PageHead, Segmented } from '../components/ui';
-import Chart from '../components/Chart';
-import { BatchSlot } from './StockTracking';
+import { Card, Empty, Loader, Modal, PageHead, Segmented } from '../components/ui';
+import { Dashboard, Geo } from './KalyanInsight';
+import { BatchSlot } from '../components/UploadParts';
 import { num } from '../lib/purposes';
 import { COLORS, fmtDate } from '../lib/format';
 import { download } from '../lib/files';
 
-const TABS = [{ v: 'all', l: 'All customers' }, { v: 'current', l: 'Current year customers' }, { v: 'dashboard', l: 'Dashboard' }];
+const TABS = [{ v: 'all', l: 'All customers' }, { v: 'current', l: 'Current year customers' }, { v: 'dashboard', l: 'Dashboard' }, { v: 'geo', l: 'Geo spread' }];
 const TYPE: Record<string, string> = { '1Y': '1 year', FY: '5 years', LM: 'Life member' };
 
 export default function KalyanCustomers() {
@@ -27,7 +27,7 @@ export default function KalyanCustomers() {
 		<>
 			<PageHead kw="Customer" rest="database" sub="Kalyan customers, uploaded only: the complete customer file and the current-year file. Uploads add and update by customer number and never delete; net new customers in a current-year upload are added to the master too. No customer is created from an email." />
 			<div className="mb-16"><Segmented value={tab} options={TABS} onChange={(v) => setSp({ tab: v }, { replace: true })} /></div>
-			{tab === 'dashboard' ? <Dashboard onList={(p) => setSp({ tab: 'all', ...p })} /> : <CustomerList tab={tab as 'all' | 'current'} />}
+			{tab === 'dashboard' ? <Dashboard onList={(t, p) => setSp({ tab: t, ...p })} /> : tab === 'geo' ? <Geo onList={(t, p) => setSp({ tab: t, ...p })} /> : <CustomerList tab={tab as 'all' | 'current'} />}
 		</>
 	);
 }
@@ -133,59 +133,3 @@ function CustomerRecord({ custno, onClose }: { custno: string; onClose: () => vo
 	);
 }
 
-function Dashboard({ onList }: { onList: (p: Record<string, string>) => void }) {
-	const [year, setYear] = useState<number | null>(null);
-	const { data, isLoading } = useQuery({ queryKey: ['kalyan-dashboard', year], queryFn: () => api(`/kalyan/dashboard${qs({ year })}`) });
-	if (isLoading || !data) return <Loader />;
-	const y = data.year;
-	const yrs = data.years.map((r: any) => String(r.year));
-	return (
-		<div className="col gap-16">
-			<div className="row-between">
-				<div className="small faint">Year {y} ({data.yearStartMonth === 1 ? 'January–December' : `starting month ${data.yearStartMonth}`}; change it in Settings → Emails). Select a figure to open the list behind it.</div>
-				<select className="input sm" style={{ width: 110 }} value={y} onChange={(e) => setYear(Number(e.target.value))} aria-label="Year">{[...new Set([y, ...data.years.map((r: any) => r.year)])].sort().reverse().map((v: any) => <option key={v} value={v}>{v}</option>)}</select>
-			</div>
-			<div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-				<Kpi label="Total customers" value={num(data.totals.total)} accent={COLORS.blue} foot={`${num(data.totals.inactive)} marked inactive`} onClick={() => onList({})} />
-				<Kpi label={`Active in ${y}`} value={num(data.current.active)} accent={COLORS.green} onClick={() => onList({ segment: '', year: String(y) })} />
-				<Kpi label={`New in ${y}`} value={num(data.current.new)} accent={COLORS.teal} foot="first year active" onClick={() => onList({ segment: 'new', segmentYear: String(y) })} />
-				<Kpi label={`Renewed in ${y}`} value={num(data.current.repeat)} accent={COLORS.purple} foot={`active in ${y - 1} and ${y}`} onClick={() => onList({ segment: 'repeat', segmentYear: String(y) })} />
-				<Kpi label={`Lost in ${y}`} value={num(data.current.lost)} accent={COLORS.red} foot={`active in ${y - 1}, not in ${y}`} onClick={() => onList({ segment: 'lost', segmentYear: String(y) })} />
-			</div>
-			<div className="grid g-2">
-				<Card title="Year on year">
-					{!yrs.length ? <Empty text="Upload a current-year file to see the years." /> : <Chart type="bar" height={280} options={{ xaxis: { categories: yrs }, colors: [COLORS.green, COLORS.teal, COLORS.purple, COLORS.red], plotOptions: { bar: { columnWidth: '60%' } } }}
-						series={[{ name: 'Active', data: data.years.map((r: any) => r.active) }, { name: 'New', data: data.years.map((r: any) => r.new) }, { name: 'Renewed', data: data.years.map((r: any) => r.repeat) }, { name: 'Lost', data: data.years.map((r: any) => r.lost) }]} />}
-				</Card>
-				<Card title={`Payments in ${y} by month`}>
-					{!data.payments.length ? <Empty text="No payment dates for this year." /> : <Chart type="bar" height={280} options={{ xaxis: { categories: data.payments.map((p: any) => p.k) }, colors: [COLORS.blue] }} series={[{ name: 'Payments', data: data.payments.map((p: any) => p.n) }]} />}
-				</Card>
-			</div>
-			<div className="grid g-3">
-				<Card title="By subscription" flush><Breakdown rows={data.byType.map((r: any) => ({ k: TYPE[r.k] || r.k, n: r.n, a: r.active, on: () => onList({ type: r.k }) }))} active={y} /></Card>
-				<Card title="By dispatch mode" flush><Breakdown rows={data.byMode.map((r: any) => ({ k: r.k, n: r.n, on: () => onList({ mode: r.k }) }))} /></Card>
-				<Card title={`Top cities (${y})`} flush><Breakdown rows={data.byCity.map((r: any) => ({ k: r.k, n: r.n }))} /></Card>
-			</div>
-			<Card title="By state" flush><Breakdown rows={data.byState.map((r: any) => ({ k: r.k, n: r.n, a: r.active, on: () => onList({ state: r.k }) }))} active={y} /></Card>
-			<Card title="Registered by year (from the complete customer file)">
-				{!data.registered.length ? <Empty text="No registration dates." /> : <Chart type="bar" height={240} options={{ xaxis: { categories: data.registered.map((r: any) => String(r.year)) }, colors: [COLORS.teal] }} series={[{ name: 'Registered', data: data.registered.map((r: any) => r.n) }]} />}
-			</Card>
-		</div>
-	);
-}
-
-function Breakdown({ rows, active }: { rows: { k: string; n: number; a?: number; on?: () => void }[]; active?: number }) {
-	if (!rows.length) return <Empty text="No data yet." />;
-	const max = Math.max(...rows.map((r) => r.n));
-	return (
-		<div className="table-wrap" style={{ maxHeight: 360, overflow: 'auto' }}><table className="table">
-			<thead><tr><th /><th className="num">Customers</th>{active && <th className="num">Active {active}</th>}<th /></tr></thead>
-			<tbody>{rows.map((r) => (
-				<tr key={r.k} className={r.on ? 'click' : ''} onClick={r.on}>
-					<td className="small">{r.k}</td><td className="num small">{num(r.n)}</td>{active && <td className="num small">{num(r.a)}</td>}
-					<td style={{ width: '35%' }}><div className="bar-cell"><div style={{ width: `${(r.n / max) * 100}%` }} /></div></td>
-				</tr>
-			))}</tbody>
-		</table></div>
-	);
-}

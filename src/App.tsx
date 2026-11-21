@@ -20,7 +20,8 @@ import Profile from './pages/Profile';
 import Help from './pages/Help';
 import CategoryReport from './pages/CategoryReport';
 import Emails from './pages/Emails';
-import StockTracking from './pages/StockTracking';
+import Stock from './pages/Stock';
+import Tracking from './pages/Tracking';
 import KalyanCustomers from './pages/KalyanCustomers';
 import MasterHub from './pages/admin/MasterHub';
 import { Loader } from './components/ui';
@@ -36,6 +37,13 @@ function Protected({ children, min }: { children: ReactNode; min?: 'viewer' | 'a
 
 function Home() {
 	return <Navigate to="/emails" replace />;
+}
+
+/** The old Stock and tracking address: its tabs now live in Stock and in Tracking. */
+function OldStockTracking() {
+	const tab = new URLSearchParams(useLocation().search).get('tab') || '';
+	const to = tab === 'orders' || tab === 'kalyan' ? `/tracking?tab=${tab}&view=upload` : tab === 'hq' || tab === 'branch' ? `/stock?tab=${tab}&view=upload` : tab === 'all' ? '/stock?tab=uploads' : '/stock';
+	return <Navigate to={to} replace />;
 }
 
 export default function App() {
@@ -74,12 +82,14 @@ export default function App() {
 				<Route path="/admin/users" element={<SettingsRedirect tab="users" />} />
 				<Route path="/admin/settings" element={<Protected min="analyst"><Settings /></Protected>} />
 				<Route path="/admin/addresses" element={<SettingsRedirect tab="master" sub="addresses" />} />
-				<Route path="/stock-tracking" element={<Protected min="analyst"><StockTracking /></Protected>} />
+				<Route path="/stock" element={<Protected min="analyst"><Stock /></Protected>} />
+				<Route path="/tracking" element={<Protected min="analyst"><Tracking /></Protected>} />
+				<Route path="/stock-tracking" element={<OldStockTracking />} />
 				<Route path="/kalyan-customers" element={<Protected min="analyst"><KalyanCustomers /></Protected>} />
 				<Route path="/admin/master" element={<Protected min="analyst"><MasterHub /></Protected>} />
-				<Route path="/uploads" element={<Navigate to="/stock-tracking?tab=all" replace />} />
+				<Route path="/uploads" element={<Navigate to="/stock?tab=uploads" replace />} />
 				<Route path="/admin/customers" element={<Navigate to="/kalyan-customers" replace />} />
-				<Route path="/inventory" element={<Navigate to="/stock-tracking" replace />} />
+				<Route path="/inventory" element={<Navigate to="/stock" replace />} />
 				<Route path="/admin/processing" element={<SettingsRedirect tab="status" />} />
 				<Route path="/admin/audit" element={<SettingsRedirect tab="audit" />} />
 				<Route path="*" element={<Navigate to="/emails" replace />} />

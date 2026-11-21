@@ -23,8 +23,9 @@ bilingual PDF attached to the reply.
 | Section | What it holds |
 | --- | --- |
 | **Emails** | Outlook-style list and reading pane (right, below or off); tabs for All, the six groups, Bulk orders and quotes, Open questions, Not for reply; search, filters and sorting on every column, saved views, keyboard shortcuts |
-| **Customer database** | Kalyan customers only, uploaded only: all customers (the complete file), current-year customers, and a dashboard (new, renewed, lost, by year, state, subscription) with Excel/CSV downloads |
-| **Stock and tracking** | Book orders (tracking), branch stock, main/retail/semi-finished stock, Kalyan tracking, and All data; a check summary before each upload is applied; full history with the original files |
+| **Customer database** | Kalyan customers only, uploaded only: all customers (the complete file), current-year customers, a dashboard for each (new, renewed, came back, lost, retention, payments, subscriptions, tenure) and **Geo spread**: an India map by state with a year slider, state trends, cities and PIN areas; Excel/CSV downloads |
+| **Stock** | Branch stock and Gorakhpur main/retail/semi-finished: a dashboard, all the data (search, filter and sort any column, download), and uploads with a check summary and history |
+| **Tracking** | Book orders and Kalyan dispatches: dashboards (with maps by state), all the data, and uploads with a check summary and history |
 | **Admin → Master data** | Locations, Others (delivery partners, Kalyan subscription types and dispatch modes, order statuses), bank details, discount, freight, book list (Suchi PDF or Excel), book links, books (combined) |
 | **Settings** | Emails (sync window, criticality and SLA, completeness facts, reason → group, Kalyan year), Pending questions (summary and weekly trend), Auto-send (coming later; cannot be switched on), Mailboxes, Users, System status (including Delete everything and rebuild), Audit log |
 | **To decide** | My day and Mail Sage, kept as they were |
@@ -55,7 +56,7 @@ npm run typecheck
 
 ## Stack
 
-React 18, Vite, TanStack Query and ApexCharts; Node.js 22 with TypeScript (tsx); PostgreSQL 16 (migrations run on
+React 18, Vite, TanStack Query, ApexCharts and Leaflet (India state outlines: DataMeet, CC BY 2.5 India); Node.js 22 with TypeScript (tsx); PostgreSQL 16 (migrations run on
 start); pdfkit with Noto Sans Devanagari for quotes; pdf.js (and poppler's pdftotext when installed) for the Suchi PDF.
 AI (optional): Anthropic Claude or Google Gemini for analysis and Rewrite; without a key the rules engine does
 everything else.

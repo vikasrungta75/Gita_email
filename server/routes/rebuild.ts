@@ -23,7 +23,7 @@ import { allMaster, saveMaster, bankQr, saveBankQr, MASTER_KEYS, type MasterKey 
 import { readSuchi, previewSuchi, applySuchi, SUCHI_COLUMNS, suchiRows, type SuchiEntry } from '../master/suchi';
 import { confirmBatch, cancelBatch } from '../uploads/batches';
 import { importStock } from '../stock/stock';
-import { listKalyanCustomers, kalyanDashboard, KALYAN_EXPORT_HEADER, kalyanExportRows } from '../kalyan/customers';
+import { listKalyanCustomers, KALYAN_EXPORT_HEADER, kalyanExportRows } from '../kalyan/customers';
 import { kalyanYearOf } from '../kalyan/year';
 import { gmailAttachment } from '../connectors/gmail';
 import type { MailboxRow } from '../connectors/types';
@@ -512,12 +512,6 @@ Rules:
 			  where c.org_id=$1 and (c.answers->>'custno' = $2 or c.facts @> $3::jsonb) order by c.last_inbound_at desc limit 30`,
 			[orgId, custno, JSON.stringify([{ key: 'kalyan_custno', value: custno }])]);
 		return { customer: c, years, dispatches, emails };
-	});
-	r.get('/api/kalyan/dashboard', async (ctx) => {
-		requireRole(ctx.user, 'analyst');
-		const cfg = await emailConfig(ctx.user!.orgId);
-		const year = Number(ctx.query.get('year')) || kalyanYearOf(cfg, new Date());
-		return { ...(await kalyanDashboard(ctx.user!.orgId, year)), yearStartMonth: cfg.kalyanYearStartMonth };
 	});
 
 	// ── Settings: email rules, pending questions, summary, auto-send ──
